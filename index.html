@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>STARFALL — open-world MMO FPS</title>
+<meta name="description" content="A Destiny-shaped MMO FPS with one continuous world: patrol the shore, walk into the dungeon, climb the raid spire. Three classes, no loading screens.">
+<meta name="theme-color" content="#0b0f22">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230b0f22'/%3E%3Cpath d='M16 3l3.6 8.6L28 15l-8.4 3.4L16 27l-3.6-8.6L4 15l8.4-3.4z' fill='%238fd8ff'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <canvas id="gl"></canvas>
+  <canvas id="hud"></canvas>
+
+  <div id="boot" style="display:none">
+    <div class="bootbox">
+      <h1>STARFALL</h1>
+      <p id="bootmsg">Charting the shore…</p>
+      <div class="bootbar"><i id="bootbar"></i></div>
+      <pre id="booterr"></pre>
+    </div>
+  </div>
+
+  <script>
+  // A black screen with no explanation is the worst possible failure mode.
+  window.addEventListener('error', function (e) {
+    var box = document.getElementById('boot');
+    var pre = document.getElementById('booterr');
+    if (box) box.style.display = 'flex';
+    var msg = document.getElementById('bootmsg');
+    if (msg) msg.textContent = 'FAILED TO LOAD';
+    if (pre && pre.textContent.length < 1200) {
+      pre.textContent += (e.message || 'error') +
+        (e.filename ? '\n  ' + e.filename.split('/').pop() + ':' + e.lineno + ':' + e.colno : '') + '\n';
+    }
+  });
+  </script>
+
+  <noscript><div class="nojs">STARFALL needs JavaScript. It is a video game.</div></noscript>
+
+  <script type="importmap">
+  { "imports": { "three": "./vendor/three.module.js" } }
+  </script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

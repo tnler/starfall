@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: starfall
+    runtime: node
+    plan: free
+    # Nothing to build: three.js is vendored and the server has no deps.
+    buildCommand: ""
+    startCommand: node serve.js
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "20"

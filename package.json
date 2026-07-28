@@ -1,0 +1,19 @@
+{
+  "name": "starfall",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "STARFALL — an open-world MMO FPS: one continuous world, three classes, a dungeon you walk into and a raid spire you climb.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node serve.js",
+    "probe": "node tools/probe.mjs",
+    "uicheck": "node tools/uicheck.mjs",
+    "test": "node tools/probe.mjs && node tools/uicheck.mjs"
+  },
+  "devDependencies": {
+    "three": "0.166.0"
+  }
+}

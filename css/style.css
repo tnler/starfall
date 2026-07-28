@@ -1,0 +1,223 @@
+/* STARFALL — style.css
+   Dark, cold, high-contrast. The 3D canvas does the work; the UI stays out of
+   the way until you ask for it. */
+
+:root {
+  --bg: #070a12;
+  --panel: rgba(9, 13, 22, 0.92);
+  --line: rgba(143, 216, 255, 0.18);
+  --ink: #dff3ff;
+  --dim: #7e8ea0;
+  --accent: #8fd8ff;
+  --warn: #ff5d3c;
+  --gold: #ffd166;
+  --font: 'Rajdhani', 'Segoe UI', 'Helvetica Neue', system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+canvas#gl, canvas#hud {
+  position: fixed;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+canvas#hud { pointer-events: none; z-index: 3; }
+
+.nojs {
+  position: fixed; inset: 0; display: grid; place-items: center;
+  font-size: 20px; letter-spacing: 0.08em;
+}
+
+/* ------------------------------------------------------------ boot ---- */
+
+#boot {
+  position: fixed; inset: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(ellipse at 50% 40%, #14203c 0%, #070a12 70%);
+}
+.bootbox { text-align: center; width: min(520px, 86vw); }
+.bootbox h1 {
+  margin: 0 0 6px; font-size: 54px; letter-spacing: 0.34em; font-weight: 700;
+  text-indent: 0.34em;
+  text-shadow: 0 0 34px rgba(143, 216, 255, 0.45);
+}
+.bootbox p { margin: 0 0 18px; color: var(--dim); letter-spacing: 0.16em; text-transform: uppercase; font-size: 13px; }
+.bootbar { height: 3px; background: rgba(255,255,255,0.08); overflow: hidden; }
+.bootbar i { display: block; height: 100%; width: 0%; background: var(--accent); transition: width 0.2s linear; }
+#booterr { color: var(--warn); font: 11px/1.4 ui-monospace, monospace; text-align: left; margin-top: 14px; white-space: pre-wrap; }
+
+/* ------------------------------------------------------------- ui ----- */
+
+.ui-root { position: fixed; inset: 0; z-index: 10; pointer-events: none; }
+.ui-layer { position: absolute; inset: 0; }
+.ui-layer > * { pointer-events: auto; }
+
+.screen {
+  position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(5,8,15,0.96), rgba(5,8,15,0.99));
+  display: flex; flex-direction: column;
+  padding: 26px clamp(18px, 5vw, 70px);
+  overflow: auto;
+}
+
+.panelhead {
+  display: flex; align-items: baseline; gap: 20px;
+  border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 18px;
+}
+.panelhead h2 { margin: 0; font-size: 26px; letter-spacing: 0.22em; font-weight: 700; }
+.panelhead .meta { color: var(--dim); letter-spacing: 0.1em; font-size: 14px; }
+.panelhead .meta b { color: var(--ink); }
+.panelhead .closehint { margin-left: auto; color: var(--dim); font-size: 12px; letter-spacing: 0.16em; }
+
+button {
+  font-family: var(--font); font-size: 13px; font-weight: 600; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--ink);
+  background: rgba(255,255,255,0.06); border: 1px solid var(--line);
+  padding: 9px 16px; cursor: pointer; transition: background 0.12s, border-color 0.12s;
+}
+button:hover:not(:disabled) { background: rgba(143,216,255,0.16); border-color: var(--accent); }
+button:disabled { opacity: 0.4; cursor: default; }
+button.primary { background: rgba(143,216,255,0.18); border-color: var(--accent); color: #eaf7ff; }
+
+input[type=text], input:not([type]) {
+  font-family: var(--font); font-size: 14px; color: var(--ink);
+  background: rgba(255,255,255,0.05); border: 1px solid var(--line);
+  padding: 7px 10px; outline: none; width: 180px;
+}
+input:focus { border-color: var(--accent); }
+
+/* -------------------------------------------------------- class pick -- */
+
+.boot { align-items: center; justify-content: center; }
+.boot-inner { width: min(1080px, 96vw); text-align: center; }
+.title {
+  font-size: clamp(48px, 9vw, 104px); margin: 0; letter-spacing: 0.3em; text-indent: 0.3em;
+  font-weight: 700; text-shadow: 0 0 40px rgba(143,216,255,0.4);
+}
+.tagline { color: var(--dim); letter-spacing: 0.22em; text-transform: uppercase; font-size: 13px; margin: 4px 0 26px; }
+.classes { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.card {
+  --accent: #8fd8ff;
+  text-align: left; border: 1px solid var(--line); background: rgba(255,255,255,0.03);
+  padding: 16px; cursor: pointer; transition: transform 0.14s, border-color 0.14s, background 0.14s;
+}
+.card:hover { transform: translateY(-3px); border-color: var(--accent); }
+.card.on { border-color: var(--accent); background: rgba(143,216,255,0.09); box-shadow: inset 0 0 40px rgba(143,216,255,0.08); }
+.card h2 { margin: 0; font-size: 24px; letter-spacing: 0.18em; color: var(--accent); }
+.card .sub { color: var(--dim); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 8px; }
+.card p { margin: 0 0 10px; font-size: 14px; color: #b9cbdb; }
+.card ul { margin: 0; padding-left: 16px; font-size: 12.5px; color: #9fb4c9; line-height: 1.55; }
+.card ul b { color: var(--ink); }
+.bootrow { display: flex; gap: 22px; justify-content: center; margin: 22px 0 14px; flex-wrap: wrap; }
+.bootrow label { color: var(--dim); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; display: flex; gap: 8px; align-items: center; }
+.hint { color: var(--dim); font-size: 12px; letter-spacing: 0.06em; margin-top: 18px; line-height: 1.7; }
+
+/* --------------------------------------------------------- inventory -- */
+
+.invbody { display: grid; grid-template-columns: minmax(300px, 400px) 1fr; gap: 26px; flex: 1; min-height: 0; }
+.col { min-height: 0; overflow: auto; }
+.col h3 { margin: 0 0 10px; font-size: 13px; letter-spacing: 0.24em; color: var(--dim); font-weight: 600; }
+.slotrow { display: grid; grid-template-columns: 92px 1fr; gap: 10px; align-items: center; margin-bottom: 7px; }
+.slotname { color: var(--dim); font-size: 11px; letter-spacing: 0.16em; }
+
+.item {
+  --rar: #c9c9c9;
+  border: 1px solid rgba(255,255,255,0.08); border-left: 3px solid var(--rar);
+  background: rgba(255,255,255,0.035); padding: 8px 10px; cursor: pointer;
+  transition: background 0.12s;
+}
+.item:hover { background: rgba(143,216,255,0.1); }
+.item.empty { opacity: 0.35; cursor: default; }
+.item .name { font-size: 15px; font-weight: 600; letter-spacing: 0.04em; color: var(--rar); }
+.item .sub { font-size: 11.5px; color: var(--dim); letter-spacing: 0.08em; text-transform: uppercase; }
+.item .power { font-size: 13px; color: var(--gold); font-weight: 700; }
+.item .power .up { color: #9dff7a; }
+.item .power .down { color: var(--warn); }
+.item .perks { font-size: 11px; color: #9fb4c9; margin-top: 2px; }
+.item .stats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.item .stats span { font-size: 10px; letter-spacing: 0.08em; color: var(--dim); border: 1px solid rgba(255,255,255,0.1); padding: 1px 4px; }
+.item button { margin-top: 8px; width: 100%; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 9px; align-content: start; }
+.empty-note { color: var(--dim); font-size: 13px; }
+
+.statbox { margin-top: 22px; }
+.statrow { display: grid; grid-template-columns: 96px auto 1fr; gap: 10px; align-items: center; margin-bottom: 5px; font-size: 12.5px; }
+.statrow em { color: var(--dim); font-style: normal; font-size: 11px; }
+.pips { display: flex; gap: 2px; }
+.pips i { width: 11px; height: 8px; background: rgba(255,255,255,0.12); display: block; }
+.pips i.on { background: var(--accent); }
+
+/* Rank: the gold track, and the perk ladder underneath it. */
+.rankmeter { height: 7px; background: rgba(255,255,255,0.1); margin: 2px 0 6px; }
+.rankmeter .fill { height: 100%; background: var(--gold); }
+.ranknote { font-size: 11px; color: var(--dim); margin-bottom: 10px; letter-spacing: 0.04em; }
+.perkrow {
+  display: grid; grid-template-columns: 26px 108px 1fr; gap: 8px; align-items: baseline;
+  font-size: 12px; margin-bottom: 3px; opacity: 0.38;
+}
+.perkrow.on { opacity: 1; }
+.perkrow b { color: var(--gold); font-size: 11px; }
+.perkrow span { letter-spacing: 0.06em; }
+.perkrow.on span { color: var(--gold); }
+.perkrow em { color: var(--dim); font-style: normal; font-size: 11px; }
+
+.detail { position: absolute; right: clamp(18px, 5vw, 70px); bottom: 26px; width: min(360px, 90vw); }
+.detailbox { border: 1px solid var(--line); background: var(--panel); padding: 14px; }
+.detailbox h3 { margin: 0 0 2px; font-size: 18px; letter-spacing: 0.06em; }
+.detailbox .sub { color: var(--dim); font-size: 12px; margin-bottom: 6px; }
+.detailbox .blurb { font-size: 13px; color: #b9cbdb; margin: 6px 0; font-style: italic; }
+.detailbox .perk { font-size: 12px; color: #9fb4c9; margin: 3px 0; }
+.detailbox .perk b { color: var(--gold); }
+.btnrow { display: flex; gap: 8px; margin-top: 12px; }
+
+/* --------------------------------------------------------------- map -- */
+
+.mapholder { display: grid; place-items: center; flex: 1; min-height: 0; }
+.mapcanvas { border: 1px solid var(--line); image-rendering: pixelated; cursor: crosshair; max-width: 100%; max-height: 100%; }
+.legend { display: flex; gap: 16px; justify-content: center; padding-top: 12px; flex-wrap: wrap; }
+.legend span { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); }
+.legend span::before { content: ''; display: inline-block; width: 8px; height: 8px; background: var(--c); margin-right: 6px; }
+
+/* ------------------------------------------------------------ vendor -- */
+
+.vendorfoot { display: flex; gap: 10px; padding-top: 16px; }
+
+/* ------------------------------------------------------------- pause -- */
+
+.settings { width: min(620px, 92vw); }
+.setrow { display: grid; grid-template-columns: 170px 1fr 70px; gap: 12px; align-items: center; margin-bottom: 10px; font-size: 13.5px; }
+.setrow em { color: var(--dim); font-style: normal; font-size: 12px; }
+.setrow input[type=range] { width: 100%; accent-color: var(--accent); }
+.runstats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 22px 0; }
+.runstats div { border: 1px solid var(--line); padding: 10px; text-align: center; }
+.runstats b { display: block; font-size: 22px; color: var(--accent); }
+.runstats span { font-size: 10px; letter-spacing: 0.18em; color: var(--dim); }
+.keys h3 { font-size: 12px; letter-spacing: 0.24em; color: var(--dim); margin: 0 0 8px; }
+.keys div { font-size: 12.5px; color: #9fb4c9; line-height: 1.9; }
+.keys b { color: var(--ink); }
+
+/* -------------------------------------------------------------- chat -- */
+
+.chatbar {
+  position: absolute; left: 34px; bottom: 190px;
+  background: rgba(5,8,15,0.85); border: 1px solid var(--line);
+  padding: 6px 10px; font-size: 13px; letter-spacing: 0.04em; pointer-events: none;
+  min-width: 320px;
+}
+.chatbar span:first-child { color: var(--accent); margin-right: 8px; letter-spacing: 0.18em; font-size: 11px; }
+.chatbar .caret { display: inline-block; width: 7px; height: 13px; background: var(--accent); vertical-align: -2px; animation: blink 1s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
