@@ -3,8 +3,9 @@ services:
     name: starfall
     runtime: node
     plan: free
-    # Nothing to build: three.js is vendored and the server has no deps.
-    buildCommand: ""
+    # Nothing to install: three.js is vendored in vendor/ and serve.js has no
+    # runtime dependencies. The only dep in package.json is for the test probe.
+    buildCommand: echo "no build step"
     startCommand: node serve.js
     healthCheckPath: /
     envVars:
