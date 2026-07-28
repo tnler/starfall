@@ -59,11 +59,14 @@ the game without a screen:
 
 ```
 npm test           # probe (world, combat, every weapon, every encounter) + UI check
+npm run netcheck   # two guardians on one shard — needs a server running
 ```
 
 The probe builds the world, benches all 11 weapon archetypes against a live
 target, casts every ability of every class, runs each dungeon and raid
-encounter, then soaks 2400 frames checking for leaks.
+encounter, then soaks 2400 frames checking for leaks. `netcheck` talks the real
+wire protocol to a running server and covers the handshake, host election,
+position and chat relay, and the host handover when the host disconnects.
 
 ## Deploy
 
