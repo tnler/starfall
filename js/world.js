@@ -1231,6 +1231,17 @@ class WorldSystem {
     return heightAt(x, z) > y + step;
   }
 
+  /** Is this point inside terrain or any collider? Used by teleports. */
+  blocked(x, y, z, pad = 0.35) {
+    if (this.terrainActive(x, y, z) && heightAt(x, z) > y) return true;
+    const boxes = this.grid.query(x, z, 2.4, this._queryBuf);
+    for (const b of boxes) {
+      if (!b.enabled || b.tag === 'trigger' || b.tag === 'nowalk') continue;
+      if (b.contains(x, y, z, pad)) return true;
+    }
+    return false;
+  }
+
   /* -------------------------------------------------------------- raycast */
 
   /**

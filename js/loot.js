@@ -177,6 +177,10 @@ export class Inventory {
     this.equip(rollWeapon(rng, { power: base, slot: 'energy', rarity: 'uncommon', archId: 'shotgun' }));
     this.equip(rollWeapon(rng, { power: base, slot: 'power', rarity: 'uncommon', archId: 'rocket' }));
     for (const s of ARMOR_SLOTS) this.equip(rollArmor(rng, { power: base, slot: s, rarity: 'common', classId: this.classId }));
+    // A blade in the bag from minute one: it takes the kinetic slot, so it is a
+    // choice rather than a handout, and nobody finds the movement speed if the
+    // only way to learn blades exist is a random drop.
+    this.add(rollWeapon(rng, { power: base, slot: 'kinetic', rarity: 'uncommon', archId: 'knife' }), true);
     this.glimmer = 500;
     return this;
   }

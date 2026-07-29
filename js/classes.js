@@ -28,6 +28,7 @@ export const CLASSES = {
     grenade: { id: 'pulse_grenade', name: 'Pulse Grenade', desc: 'Sticks and detonates five times.' },
     melee: { id: 'seismic', name: 'Seismic Slam', desc: 'Shoulder-charge dash. Knocks fodder off their feet.' },
     classAbility: { id: 'bulwark', name: 'Bulwark', desc: 'Deployable wall. Real cover — bullets stop at it.' },
+    traversal: { id: 'thrust', name: 'Thrusters', cd: 4.2, desc: 'Rocket-assisted leap. Shoves anything you land on.' },
     super: { id: 'ram', name: 'RAM', desc: 'Armour up and charge. Slam to end it.', duration: 9.5 },
     passive: 'Shields recharge 15% faster after a melee kill.'
   },
@@ -40,6 +41,7 @@ export const CLASSES = {
     grenade: { id: 'vortex', name: 'Vortex Grenade', desc: 'A hole in the floor that keeps eating.' },
     melee: { id: 'palm', name: 'Void Palm', desc: 'Ranged blast that heals you on hit.' },
     classAbility: { id: 'wellspring', name: 'Wellspring', desc: 'Rift: heals, or empowers your damage. Hold to switch.' },
+    traversal: { id: 'blink', name: 'Blink', cd: 3.6, desc: 'Short teleport where you are looking. Goes through gaps.' },
     super: { id: 'nova', name: 'NOVA BLOOM', desc: 'Throw the bomb. It opens.', duration: 7 },
     passive: 'Ability kills return 12% grenade energy.'
   },
@@ -52,6 +54,7 @@ export const CLASSES = {
     grenade: { id: 'tripmine', name: 'Tripmine', desc: 'Sticks where you throw it. Waits.' },
     melee: { id: 'kunai', name: 'Kunai', desc: 'Thrown knife. Precision kills ignite.' },
     classAbility: { id: 'fade', name: 'Fade', desc: 'Dodge: reloads your weapon and breaks their aim.' },
+    traversal: { id: 'skate', name: 'Slipstream', cd: 3.0, desc: 'Long air dash. Chains with your double jump.' },
     super: { id: 'edge', name: 'UMBRAL EDGE', desc: 'Three shots. Make them precision.', duration: 9 },
     passive: 'Dodging near an enemy refunds melee energy.'
   }
@@ -156,6 +159,7 @@ export class Abilities {
     this.grenadeCd = 0;
     this.meleeCd = 0;
     this.classCd = 0;
+    this.traversalCd = 0;
     this.superEnergy = 0;       // 0..1
     this.superActive = null;
     this.riftMode = 'heal';     // Oracle toggle
@@ -167,6 +171,7 @@ export class Abilities {
   get grenadeReady() { return this.grenadeCd <= 0; }
   get meleeReady() { return this.meleeCd <= 0; }
   get classReady() { return this.classCd <= 0; }
+  get traversalReady() { return this.traversalCd <= 0; }
   get superReady() { return this.superEnergy >= 1 && !this.superActive; }
 
   addSuper(frac) {
@@ -182,6 +187,7 @@ export class Abilities {
     this.grenadeCd = Math.max(0, this.grenadeCd - dt);
     this.meleeCd = Math.max(0, this.meleeCd - dt);
     this.classCd = Math.max(0, this.classCd - dt);
+    this.traversalCd = Math.max(0, this.traversalCd - dt);
     this.dodgeT = Math.max(0, this.dodgeT - dt);
     this.invisT = Math.max(0, this.invisT - dt);
     if (!this.superActive) this.addSuper(0.0055 * dt);   // slow trickle so you always get one eventually
@@ -325,6 +331,76 @@ export class Abilities {
       FX.burst(p.pos, { count: 16, speed: 6, color: 0x6fe0ff, life: 0.4, size: 0.14, flat: true });
       const near = Combat.nearestTarget(p.pos.x, p.pos.y, p.pos.z, 9, FACTION.ENEMY);
       if (near) this.addMelee(0.5);
+    }
+    return true;
+  }
+
+  /* Traversal. Deliberately on a short cooldown and separate from the class
+     ability: the world is 3600 units across with a 780-unit hole in the middle,
+     and crossing it should not cost you your only defensive cast. Each of these
+     works in the air, because the interesting places to reach are off the edge
+     of something. */
+  useTraversal() {
+    if (!this.traversalReady || this.p.dead) return false;
+    const p = this.p;
+    const t = this.def.traversal;
+    this.traversalCd = t.cd;
+    Audio.play('ability', { pos: p.pos, vol: 0.75 });
+
+    // Direction: where you are moving, else where you are looking.
+    const mv = p.moveDir;
+    const moving = Math.abs(mv.x) + Math.abs(mv.z) > 0.01;
+    const dir = moving
+      ? _v.set(mv.x, 0, mv.z).normalize()
+      : _v.copy(p.aimDir).setY(0).normalize();
+
+    if (t.id === 'thrust') {
+      // Warden: goes UP more than out — the heavy's answer to a cliff.
+      p.velocity.x += dir.x * 13;
+      p.velocity.z += dir.z * 13;
+      p.velocity.y = Math.max(p.velocity.y, 0) + 15.5;
+      p.jumpsLeft = Math.max(p.jumpsLeft, 0);
+      FX.burst(p.pos, { count: 20, speed: 7, color: 0xff7a4c, life: 0.5, size: 0.18, flat: true });
+      FX.ring(p.pos, { color: 0xff7a4c, r1: 4.5, life: 0.4, alpha: 0.6 });
+      // Shove anything standing right next to you as you go.
+      Combat.splash(p.pos.x, p.pos.y + 1, p.pos.z, 4.2, 26,
+        { source: p, kind: 'ability', mask: FACTION.ENEMY, minFactor: 0.4 });
+    } else if (t.id === 'blink') {
+      // Oracle: a real teleport, so it crosses gaps nothing else can. Step
+      // along the aim ray and stop before anything solid — blinking into rock
+      // would be the one thing worse than not having it.
+      const aim = _v2.copy(p.aimDir).normalize();
+      const MAX = 22;
+      let dist = 0;
+      // Probe the body, not a point, and only at chest and head height: testing
+      // near the floor snags on every kerb and doorstep, and a blink that a
+      // 40cm lip can cancel is not a traversal tool.
+      for (let step = 1.5; step <= MAX; step += 1.5) {
+        const nx = p.pos.x + aim.x * step;
+        const ny = p.pos.y + aim.y * step;
+        const nz = p.pos.z + aim.z * step;
+        if (World.blocked(nx, ny + 1.0, nz, p.radius) ||
+            World.blocked(nx, ny + p.height - 0.2, nz, p.radius)) break;
+        dist = step;
+      }
+      if (dist > 1) {
+        FX.burst(p.pos, { count: 18, speed: 5, color: 0xc39dff, life: 0.4, size: 0.16 });
+        p.pos.set(p.pos.x + aim.x * dist, p.pos.y + aim.y * dist, p.pos.z + aim.z * dist);
+        // Keep momentum but kill the fall, so blinking upward actually gains height.
+        p.velocity.y = Math.min(p.velocity.y, 2.5);
+        FX.burst(p.pos, { count: 22, speed: 6, color: 0xc39dff, life: 0.5, size: 0.18 });
+      } else {
+        this.traversalCd = t.cd * 0.35;   // refund most of it if it went nowhere
+      }
+    } else {
+      // Phantom: long, flat, and it refreshes the second jump.
+      p.velocity.x += dir.x * 30;
+      p.velocity.z += dir.z * 30;
+      if (p.velocity.y < 0) p.velocity.y *= 0.25;
+      p.velocity.y += 5.5;
+      p.jumpsLeft = Math.max(p.jumpsLeft, 1);
+      p.dashTrail = 0.35;
+      FX.burst(p.pos, { count: 16, speed: 8, color: 0x6fe0ff, life: 0.4, size: 0.14, flat: true });
     }
     return true;
   }

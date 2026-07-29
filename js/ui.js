@@ -54,7 +54,7 @@ class UISystem {
         </div>
         <button class="primary" id="startbtn">DROP IN</button>
         <p class="hint">WASD move · Shift sprint · Ctrl slide · Space jump (class jump in air) · LMB fire · RMB aim ·
-          R reload · Q grenade · V melee · E class ability · X super · F interact · Tab inventory · M map · Enter chat</p>
+          R reload · Q grenade · V melee · E class ability · C move ability · X super · F interact · Tab inventory · M map · Enter chat</p>
       </div>`;
     const list = wrap.querySelector('.classes');
     let picked = 'warden';
@@ -71,6 +71,7 @@ class UISystem {
           <li><b>Grenade</b> ${c.grenade.name} — ${c.grenade.desc}</li>
           <li><b>Melee</b> ${c.melee.name} — ${c.melee.desc}</li>
           <li><b>Class</b> ${c.classAbility.name} — ${c.classAbility.desc}</li>
+          <li><b>Move</b> ${c.traversal.name} — ${c.traversal.desc}</li>
           <li><b>Super</b> ${c.super.name} — ${c.super.desc}</li>
           <li><b>Jump</b> ${c.jumpStyle === 'double' ? 'Double jump' : c.jumpStyle === 'glide' ? 'Glide' : 'Lift'}</li>
         </ul>`;

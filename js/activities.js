@@ -20,13 +20,21 @@ import Audio from './audio.js';
 const _v = new THREE.Vector3();
 
 /* Region spawn tables — what lives where, and how hard it hits. */
-const REGION_TABLE = {
+/* Every region needs a pool or it is a dead zone — the Descent and Skyreach
+   shipped with none, so the two newest places on the map had no enemies in
+   them at all. Pools are weighted so each region teaches a different threat. */
+export const REGION_TABLE = {
   rally: { level: 1, pool: [] },
-  ashfall: { level: 2, pool: [['chitter', 4], ['skirmisher', 3], ['shank', 2], ['captain', 0.5]] },
-  rift: { level: 5, pool: [['skirmisher', 4], ['chitter', 3], ['marksman', 2], ['captain', 1], ['servitor', 0.6]] },
-  frost: { level: 4, pool: [['marksman', 3], ['skirmisher', 3], ['shank', 2], ['captain', 0.7]] },
-  maw: { level: 7, pool: [['chitter', 4], ['skirmisher', 3], ['bulwark', 0.8], ['captain', 1]] },
-  spire: { level: 9, pool: [['skirmisher', 3], ['marksman', 2], ['captain', 1.2], ['servitor', 0.5]] }
+  ashfall: { level: 2, pool: [['chitter', 4], ['skirmisher', 3], ['shank', 2], ['howler', 1.2], ['captain', 0.5]] },
+  rift: { level: 5, pool: [['skirmisher', 4], ['chitter', 3], ['marksman', 2], ['stalker', 1.6], ['captain', 1], ['servitor', 0.6]] },
+  frost: { level: 4, pool: [['marksman', 3], ['skirmisher', 3], ['shank', 2], ['lancer', 1.2], ['captain', 0.7]] },
+  maw: { level: 7, pool: [['chitter', 4], ['skirmisher', 3], ['howler', 2], ['ravager', 0.8], ['bulwark', 0.8], ['captain', 1]] },
+  spire: { level: 9, pool: [['skirmisher', 3], ['marksman', 2], ['seraph', 0.9], ['lancer', 1], ['captain', 1.2], ['servitor', 0.5]] },
+  // The shaft: verticality everywhere, so it leans on the fliers and on the
+  // things that punish standing still on a narrow road.
+  descent: { level: 6, pool: [['sentinel', 3], ['stalker', 2.5], ['howler', 2], ['shank', 2], ['seraph', 0.8], ['ravager', 0.6]] },
+  // Rooftops: snipers holding the high lanes, and drones between the towers.
+  skyreach: { level: 5, pool: [['sentinel', 3], ['marksman', 2.5], ['skirmisher', 2], ['lancer', 1.4], ['stalker', 1.2], ['captain', 0.6]] }
 };
 
 /* -------------------------------------------------------------- helpers */

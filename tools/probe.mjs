@@ -419,6 +419,139 @@ for (let i = 0; i < (QUICK ? 400 : 1400); i++) {
 check('player stayed in the world', minY > -100, `min y ${minY.toFixed(1)}`);
 check('player stayed near the ground', maxDrop < 40, `max height above support ${maxDrop.toFixed(1)}`);
 
+/* Every enemy the world can ask for must exist, and every region must be able
+   to populate itself. Two regions shipped with no spawn pool at all, which is
+   silent: you just walk through an empty city and never know why. */
+{
+  const { REGION_TABLE } = await import('../js/activities.js');
+  const missingPool = REGIONS.filter(r => r.id !== 'rally' &&
+    !(REGION_TABLE[r.id] && REGION_TABLE[r.id].pool.length)).map(r => r.id);
+  check('every region can spawn enemies', missingPool.length === 0,
+    missingPool.length ? `no pool: ${missingPool.join(', ')}` : `${REGIONS.length} regions`);
+
+  const bad = [];
+  for (const [rid, tbl] of Object.entries(REGION_TABLE)) {
+    for (const [id] of tbl.pool) if (!ENEMY_TYPES[id]) bad.push(`${rid}:${id}`);
+  }
+  check('spawn tables only name real enemies', bad.length === 0, bad.join(', ') || 'all resolve');
+
+  // Every type must build, spawn, stand on the ground and be shootable.
+  let built = 0, broken = [];
+  for (const id of Object.keys(ENEMY_TYPES)) {
+    const ex = -1400 + built * 6, ez = -1250;
+    const e = Enemies.spawnAtGround(id, ex, ez, { level: 3 });
+    if (!e) { broken.push(id + ':nospawn'); continue; }
+    if (!isFinite(e.pos.y) || e.pos.y < -100) broken.push(id + ':fell');
+    if (!e.mesh || !e.mesh.geometry) broken.push(id + ':nomesh');
+    if (!(e.vitals.total > 0)) broken.push(id + ':nohp');
+    built++;
+    e.dispose();
+  }
+  check('every enemy type spawns and builds', broken.length === 0,
+    broken.length ? broken.join(', ') : `${built} types`);
+}
+
+/* Suicide rushers detonate, and the blast is real. */
+{
+  const hx = -1400, hz = -1180;
+  player.respawn(hx, heightAt(hx, hz) + 2, hz);
+  for (let i = 0; i < 30; i++) frame(1 / 60);
+  player.vitals.reset();
+  const hp0 = player.vitals.total;
+  const bomber = Enemies.spawnAtGround('howler', player.pos.x + 2.5, player.pos.z, { level: 3 });
+  if (!bomber) errors.push('no howler spawned');
+  else {
+    let blew = false;
+    for (let i = 0; i < 240 && !blew; i++) { frame(1 / 60); if (!bomber.alive) blew = true; }
+    check('a howler reaches you and detonates', blew, blew ? 'detonated' : 'never went off');
+    check('a howler blast actually hurts', player.vitals.total < hp0,
+      `${hp0.toFixed(0)} -> ${player.vitals.total.toFixed(0)}`);
+    if (bomber.alive) bomber.dispose();
+  }
+  player.vitals.reset();
+}
+
+/* Blades: they have to actually hit, they have to make you faster, and they
+   must never consume ammo they do not have. */
+{
+  const { MELEE_ARCHS, ARCHETYPES: ARCH } = await import('../js/weapons.js');
+  const bx = -1400, bz = -1320;
+  for (const archId of MELEE_ARCHS) {
+    player.respawn(bx, heightAt(bx, bz) + 2, bz);
+    for (let i = 0; i < 30; i++) frame(1 / 60);
+    player.vitals.reset();
+
+    const blade = rollWeapon(makeRNG(archId.length * 17), { power: 200, archId, rarity: 'legendary' });
+    check(`${archId} rolls into the kinetic slot`, blade.slot === 'kinetic', blade.slot);
+    player.inventory.equip(blade);
+    player.refreshGear();
+    player.slotIndex = player.slotOrder.indexOf('kinetic');
+    const w = player.currentWeapon;
+    if (!w) { errors.push(`no weapon after equipping ${archId}`); continue; }
+    w.equipTimer = 0;
+
+    const target = Enemies.spawnAtGround('skirmisher', player.pos.x + 2.2, player.pos.z, { level: 1 });
+    if (!target) { errors.push('no blade test target'); continue; }
+    player.yaw = Math.atan2(-(target.pos.x - player.pos.x), -(target.pos.z - player.pos.z));
+    player.pitch = 0;
+    const hp0 = target.vitals.total;
+    const ammo0 = w.ammo;
+    for (let i = 0; i < 90 && target.alive; i++) {
+      frame(1 / 60, [], [i % 8 < 4, false, false]);
+      player.yaw = Math.atan2(-(target.pos.x - player.pos.x), -(target.pos.z - player.pos.z));
+    }
+    check(`${archId} can kill`, !target.alive || target.vitals.total < hp0,
+      !target.alive ? 'killed it' : `${hp0.toFixed(0)} -> ${target.vitals.total.toFixed(0)}`);
+    check(`${archId} never spends ammo`, w.ammo === ammo0, `${ammo0} -> ${w.ammo}`);
+    if (target.alive) target.dispose();
+
+    // Speed: the whole reason to carry one.
+    check(`${archId} makes you faster`, ARCH[archId].moveMul > 1.05,
+      `x${ARCH[archId].moveMul}`);
+    // And it has to look like a blade, not the generic gun template.
+    const vmVerts = player.vm && player.vm.geometry && player.vm.geometry.attributes.position
+      ? player.vm.geometry.attributes.position.count : 0;
+    check(`${archId} has a view model`, vmVerts > 0, `${vmVerts} verts`);
+  }
+  // A blade must not reach across the map.
+  player.respawn(bx, heightAt(bx, bz) + 2, bz);
+  for (let i = 0; i < 30; i++) frame(1 / 60);
+  const far = Enemies.spawnAtGround('skirmisher', player.pos.x + 22, player.pos.z, { level: 1 });
+  if (far) {
+    player.yaw = Math.atan2(-(far.pos.x - player.pos.x), -(far.pos.z - player.pos.z));
+    const before = far.vitals.total;
+    for (let i = 0; i < 40; i++) frame(1 / 60, [], [i % 8 < 4, false, false]);
+    check('a blade cannot hit across the room', far.vitals.total === before,
+      `${before.toFixed(0)} -> ${far.vitals.total.toFixed(0)} at 22 units`);
+    far.dispose();
+  }
+}
+
+/* Rocket jumping: your own blast throws you, an enemy's does not. */
+{
+  const { Projectiles } = await import('../js/weapons.js');
+  const rx = -1400, rz = -1360;
+  player.respawn(rx, heightAt(rx, rz) + 2, rz);
+  for (let i = 0; i < 30; i++) frame(1 / 60);
+  const hp0 = player.vitals.total;
+  const y0 = player.pos.y;
+  // Detonate at the player's feet, the way a rocket fired at the floor lands.
+  const push = player.blastImpulse(player.pos.x, player.pos.y, player.pos.z, 7.5, 120);
+  check('a blast at your feet launches you', push > 0 && player.velocity.y > 8,
+    `push ${push.toFixed(0)}, vy ${player.velocity.y.toFixed(1)}`);
+  let peak = player.pos.y;
+  for (let i = 0; i < 90; i++) { frame(1 / 60); peak = Math.max(peak, player.pos.y); }
+  check('a rocket jump gains real height', peak - y0 > 6, `+${(peak - y0).toFixed(1)} units`);
+  check('a rocket jump costs health but does not kill', player.vitals.total < hp0 && player.alive,
+    `${hp0.toFixed(0)} -> ${player.vitals.total.toFixed(0)}`);
+  // Out of range must do nothing at all.
+  player.respawn(rx, heightAt(rx, rz) + 2, rz);
+  for (let i = 0; i < 30; i++) frame(1 / 60);
+  check('a distant blast does not move you',
+    player.blastImpulse(player.pos.x + 40, player.pos.y, player.pos.z, 7.5, 120) === 0);
+}
+
+
 /* --------------------------------------------------------- combat loop */
 
 Combat.stats.shots = 0; Combat.stats.hits = 0; Combat.stats.kills = 0;
@@ -462,7 +595,10 @@ for (const archId of Object.keys(ARCHETYPES)) {
   const w = player.currentWeapon;
   if (!w) { errors.push(`no weapon after equipping ${archId}`); continue; }
   w.equipTimer = 0;
-  const target = Enemies.spawnAtGround('skirmisher', player.pos.x + 9, player.pos.z, { level: 1 });
+  // Bench each archetype at a range it is actually built for: a knife tested
+  // from 9 units away just reports that knives do not work.
+  const benchRange = ARCHETYPES[archId].mode === 'melee' ? 2.2 : 9;
+  const target = Enemies.spawnAtGround('skirmisher', player.pos.x + benchRange, player.pos.z, { level: 1 });
   if (!target) { errors.push('failed to spawn test target'); continue; }
   // Face the target.
   player.yaw = Math.atan2(-(target.pos.x - player.pos.x), -(target.pos.z - player.pos.z));
@@ -490,6 +626,9 @@ check('shots landed on target', Combat.stats.hits > 20,
 /* --------------------------------------------------------- abilities   */
 
 for (const classId of CLASS_LIST) {
+  // Clean slate per class. The Warden leaves a Bulwark standing, and the next
+  // class then tests its traversal against a wall the player never placed.
+  Effects.clear();
   const p = guard(`player(${classId})`, () => new Player(classId));
   if (!p) continue;
   p.attachCamera(camera);
@@ -504,6 +643,33 @@ for (const classId of CLASS_LIST) {
   guard(`${classId} grenade`, () => p.abilities.useGrenade());
   guard(`${classId} melee`, () => p.abilities.useMelee());
   guard(`${classId} class ability`, () => p.abilities.useClassAbility(false));
+
+  /* Traversal has one job: move you. Assert it actually does, that it is on the
+     short cooldown that makes it a traversal tool rather than a second class
+     ability, and that it never puts you inside the world. */
+  {
+    const before = p.pos.clone();
+    p.velocity.set(0, 0, 0);
+    p.yaw = 0.7;
+    p.pitch = 0;
+    p._computeAim();
+    const used = guard(`${classId} traversal`, () => p.abilities.useTraversal());
+    check(`${classId} traversal casts`, !!used);
+    check(`${classId} traversal cooldown is short`, p.abilities.traversalCd <= 5.001,
+      `${p.abilities.traversalCd.toFixed(1)}s`);
+    for (let i = 0; i < 30; i++) {
+      Input.simulate({ keys: [], mouse: [false, false, false] });
+      Input.beginFrame();
+      guard(`${classId} traversal frame`, () => p.update(1 / 60, Input, camera));
+      Input.endFrame();
+    }
+    const moved = Math.hypot(p.pos.x - before.x, p.pos.y - before.y, p.pos.z - before.z);
+    check(`${classId} traversal actually moves you`, moved > 3.5, `${moved.toFixed(1)} units`);
+    check(`${classId} traversal does not end inside the world`,
+      !World.blocked(p.pos.x, p.pos.y + 0.9, p.pos.z, 0.2) && p.alive,
+      `at ${p.pos.x.toFixed(0)},${p.pos.y.toFixed(0)},${p.pos.z.toFixed(0)}`);
+    p.abilities.traversalCd = 0;
+  }
   p.abilities.superEnergy = 1;
   const cast = guard(`${classId} super`, () => p.abilities.useSuper());
   check(`${classId} super casts`, !!cast);

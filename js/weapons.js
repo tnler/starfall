@@ -99,8 +99,51 @@ export const ARCHETYPES = {
     zoom: 0.72, adsTime: 0.26, swap: 0.5, sound: 'bow', ammo: 'primary',
     pierce: 2,
     blurb: 'Silent, and it goes through two of them.'
+  },
+
+  /* Blades. They take your kinetic slot, so carrying one costs you a primary —
+     what you get back is speed. `moveMul` is applied in the player controller,
+     and it is the whole reason to hold one: the world is big and a scythe makes
+     crossing it 22% cheaper. Reach is generous because a melee weapon that
+     whiffs on a 0.42-radius enemy is not fun, and there is no ammo to track. */
+  knife: {
+    id: 'knife', label: 'Combat Knife', slot: SLOT.KINETIC, mode: 'melee',
+    rpm: 260, damage: 62, crit: 2.4, reach: 3.4, arc: 60, moveMul: 1.26,
+    lunge: 7.5, swing: 0.16, mag: 1, reserves: 0, reload: 0,
+    hipSpread: 0, adsSpread: 0, recoil: [0.5, 0.2], falloff: [4, 6],
+    zoom: 1, adsTime: 0.14, swap: 0.28, sound: 'melee', ammo: 'none',
+    blurb: 'Fastest thing you can hold. Get there first.'
+  },
+  sword: {
+    id: 'sword', label: 'Sword', slot: SLOT.KINETIC, mode: 'melee',
+    rpm: 150, damage: 128, crit: 1.8, reach: 4.4, arc: 95, moveMul: 1.16,
+    lunge: 8.5, swing: 0.24, mag: 1, reserves: 0, reload: 0,
+    hipSpread: 0, adsSpread: 0, recoil: [0.9, 0.3], falloff: [5, 7],
+    zoom: 1, adsTime: 0.18, swap: 0.4, sound: 'melee', ammo: 'none',
+    blurb: 'One clean arc. Everything in front of it falls over.'
+  },
+  axe: {
+    id: 'axe', label: 'Breach Axe', slot: SLOT.KINETIC, mode: 'melee',
+    rpm: 96, damage: 235, crit: 1.7, reach: 4.2, arc: 80, moveMul: 1.10,
+    lunge: 6.5, swing: 0.34, mag: 1, reserves: 0, reload: 0,
+    knock: 12,
+    hipSpread: 0, adsSpread: 0, recoil: [1.5, 0.4], falloff: [5, 7],
+    zoom: 1, adsTime: 0.2, swap: 0.5, sound: 'melee', ammo: 'none',
+    blurb: 'Slow. Sends whatever survives somewhere else.'
+  },
+  scythe: {
+    id: 'scythe', label: 'Reaper Scythe', slot: SLOT.KINETIC, mode: 'melee',
+    rpm: 120, damage: 96, crit: 1.9, reach: 5.6, arc: 170, moveMul: 1.22,
+    lunge: 6, swing: 0.3, mag: 1, reserves: 0, reload: 0,
+    heal: 14,
+    hipSpread: 0, adsSpread: 0, recoil: [0.8, 0.5], falloff: [6, 8],
+    zoom: 1, adsTime: 0.2, swap: 0.46, sound: 'melee', ammo: 'none',
+    blurb: 'Cuts a half-circle. Every kill feeds you.'
   }
 };
+
+/** Blades: the archetypes that swing instead of shoot. */
+export const MELEE_ARCHS = ['knife', 'sword', 'axe', 'scythe'];
 
 export const ARCH_LIST = Object.keys(ARCHETYPES);
 
@@ -232,6 +275,12 @@ class ProjectileSystem {
       Combat.splash(x, y, z, p.splash.radius, p.splash.damage, {
         ...info, mask: p.mask, minFactor: 0.3, ignore: directTarget
       });
+      // Rocket jumping. Your own blast throws you; enemies' do not, and the
+      // splash mask already means it never damages you, so the ride is free
+      // apart from the deliberate scratch applied in blastImpulse().
+      if (p.owner && p.owner.isPlayer && p.owner.blastImpulse) {
+        p.owner.blastImpulse(x, y, z, p.splash.radius, p.splash.damage);
+      }
     } else {
       FX.impact(_v.set(x, y, z), { x: 0, y: 1, z: 0 }, p.color, 0.8);
     }
@@ -367,6 +416,12 @@ export class Weapon {
     if (this.equipTimer > 0) return null;
 
     const d = this.def;
+    if (d.mode === 'melee') {
+      if (this.cool > 0 || !down) return null;
+      this.cool = 60 / this.rpm;
+      return this._swing(ctx);
+    }
+
     if (d.mode === 'charge') {
       if (down && this.ammo > 0 && this.reloading <= 0) {
         if (this.charge === 0) Audio.play('charge', { dur: d.charge, vol: 0.7 });
@@ -461,6 +516,64 @@ export class Weapon {
       yaw: (rng() * 2 - 1) * rec[1] * stab * (ctx.ads ? 0.6 : 1),
       kick: (d.id === 'rocket' || d.id === 'shotgun' || d.id === 'sniper') ? 1 : 0.45
     };
+  }
+
+  /* A swing: everything alive inside a cone in front of you, all at once. Uses
+     the same Combat.damage path as a bullet, so perks, power scaling and the
+     kill feed behave identically — a blade is a weapon, not a special case. */
+  _swing(ctx) {
+    const d = this.def;
+    const owner = ctx.owner;
+    this.owner = owner;
+    Audio.play(d.sound, { pos: ctx.origin, vol: 0.9 });
+
+    const dir = ctx.dir;
+    const cosArc = Math.cos((d.arc * 0.5) * Math.PI / 180);
+    const reach = d.reach;
+    let hits = 0, killed = 0;
+
+    for (const t of Combat.targets) {
+      if (!t.alive || t === owner) continue;
+      if (ctx.mask != null && !(t.faction & ctx.mask)) continue;
+      const cx = t.pos.x - ctx.origin.x;
+      const cy = (t.pos.y + t.height * 0.5) - ctx.origin.y;
+      const cz = t.pos.z - ctx.origin.z;
+      const dist = Math.hypot(cx, cy, cz);
+      if (dist > reach + t.radius) continue;
+      // Angle test against the target's centre, widened by its own radius so a
+      // big enemy standing at the edge of the arc still connects.
+      const inv = 1 / Math.max(0.0001, dist);
+      const dot = (cx * dir.x + cy * dir.y + cz * dir.z) * inv;
+      const slop = clamp01(t.radius / Math.max(1, dist)) * 0.5;
+      if (dot < cosArc - slop) continue;
+
+      let dmg = this.damage * this.perkDamageMul(t, false);
+      dmg *= powerScale(ctx.power, t.power);
+      const wasAlive = t.alive;
+      Combat.damage(t, dmg, { crit: false, source: owner, kind: 'melee', dir, power: ctx.power });
+      FX.bloodHit({ x: t.pos.x, y: t.pos.y + t.height * 0.55, z: t.pos.z }, dir, t.hitColor || 0x8fd8ff, 1.3);
+      if (d.knock && t.knockback) t.knockback(dir.x * d.knock, d.knock * 0.35, dir.z * d.knock);
+      hits++;
+      if (wasAlive && !t.alive) { killed++; this._onKill(t, false, t.pos); }
+    }
+
+    // A scythe feeds you, but only on a kill — otherwise it is a free heal
+    // button you hold down at a wall.
+    if (d.heal && killed && owner && owner.vitals) owner.vitals.heal(d.heal * killed);
+
+    // Lunge: a small step into the swing so blades close the last metre for you.
+    if (d.lunge && owner && owner.velocity && !owner.dead) {
+      owner.velocity.x += dir.x * d.lunge;
+      owner.velocity.z += dir.z * d.lunge;
+    }
+
+    Combat.stats.shots++;
+    if (hits) Combat.stats.hits += hits;
+    FX.ring(_v.set(ctx.origin.x + dir.x * d.reach * 0.55,
+                   ctx.origin.y + dir.y * d.reach * 0.55,
+                   ctx.origin.z + dir.z * d.reach * 0.55),
+      { color: 0xdff3ff, r0: 0.3, r1: d.reach * 0.8, life: 0.18, alpha: 0.55, up: false });
+    return { pitch: d.recoil[0] * 0.5, yaw: (Math.random() * 2 - 1) * d.recoil[1], kick: 0.3 };
   }
 
   _hitscan(ctx, spreadDeg, rng) {
@@ -593,14 +706,19 @@ const NOUN = ['Verdict', 'Choir', 'Reveler', 'Sight', 'Answer', 'Wolf', 'Hymn', 
 const EXOTICS = {
   auto: 'ASHEN CHORUS', smg: 'SMALL MERCIES', pulse: 'TRIPTYCH', scout: 'LONGSIGHT',
   handcannon: 'LAST VERDICT', shotgun: 'CINDERBORE', sniper: 'PERIHELION',
-  fusion: 'NOVA CHOIR', rocket: 'SUNDERING WOLF', gl: 'PARTING GIFT', bow: 'QUIET ARGUMENT'
+  fusion: 'NOVA CHOIR', rocket: 'SUNDERING WOLF', gl: 'PARTING GIFT', bow: 'QUIET ARGUMENT',
+  knife: 'SPLIT SECOND', sword: 'THE LONG ANSWER', axe: 'DOORBREAKER', scythe: 'HARVEST DEBT'
 };
+
+/* Blades get their own nouns — "Ash Rifle" reads wrong on a scythe. */
+const BLADE_NOUN = ['EDGE', 'FANG', 'TOOTH', 'CLEAVER', 'REMEDY', 'ARGUMENT', 'VERDICT', 'MERCY', 'PROMISE', 'GRUDGE'];
 
 export function weaponName(archId, rarity, rng) {
   if (rarity === 'exotic') return EXOTICS[archId] || 'THE UNNAMED';
   const r = rng || Math.random;
   const p = PREFIX[Math.floor(r() * PREFIX.length)];
-  const n = NOUN[Math.floor(r() * NOUN.length)];
+  const pool = ARCHETYPES[archId] && ARCHETYPES[archId].mode === 'melee' ? BLADE_NOUN : NOUN;
+  const n = pool[Math.floor(r() * pool.length)];
   return `${p} ${n}`;
 }
 

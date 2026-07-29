@@ -244,10 +244,12 @@ class HUDSystem {
     const gap = 10;
     const x0 = 34;
     const y = this.H - 74;
+    const trav = player.classDef.traversal;
     const items = [
       { key: 'Q', label: 'GRENADE', cd: a.grenadeCd, max: st.grenadeCd, color: '#ff9a3c' },
       { key: 'V', label: 'MELEE', cd: a.meleeCd, max: st.meleeCd, color: '#ffd166' },
-      { key: 'E', label: player.classDef.classAbility.name.toUpperCase(), cd: a.classCd, max: st.classCd, color: player.classDef.css }
+      { key: 'E', label: player.classDef.classAbility.name.toUpperCase(), cd: a.classCd, max: st.classCd, color: player.classDef.css },
+      { key: 'C', label: trav.name.toUpperCase(), cd: a.traversalCd, max: trav.cd, color: '#9dff7a' }
     ];
     items.forEach((it, i) => {
       const x = x0 + i * (size + gap);
@@ -295,9 +297,16 @@ class HUDSystem {
     this.text(w.name.toUpperCase(), x, y - 44, { size: 16, align: 'right', color: rar.css, weight: '700' });
     this.text(w.def.label.toUpperCase(), x, y - 27, { size: 11, align: 'right', color: '#7e8ea0' });
 
-    const ammoCol = w.reloading > 0 ? '#ffd166' : (w.ammo / w.mag < 0.25 ? '#ff5d3c' : '#dff3ff');
-    this.text(String(w.ammo), x - 62, y + 4, { size: 40, align: 'right', color: ammoCol, weight: '700' });
-    this.text('/ ' + w.reserve, x, y + 4, { size: 18, align: 'right', color: '#7e8ea0', weight: '600' });
+    if (w.def.mode === 'melee') {
+      // Blades have no ammo to count. Show what you are actually trading for.
+      this.text('∞', x - 62, y + 4, { size: 40, align: 'right', color: '#9dff7a', weight: '700' });
+      this.text(`+${Math.round((w.def.moveMul - 1) * 100)}% SPEED`, x, y + 4,
+        { size: 14, align: 'right', color: '#9dff7a', weight: '700' });
+    } else {
+      const ammoCol = w.reloading > 0 ? '#ffd166' : (w.ammo / w.mag < 0.25 ? '#ff5d3c' : '#dff3ff');
+      this.text(String(w.ammo), x - 62, y + 4, { size: 40, align: 'right', color: ammoCol, weight: '700' });
+      this.text('/ ' + w.reserve, x, y + 4, { size: 18, align: 'right', color: '#7e8ea0', weight: '600' });
+    }
 
     if (w.reloading > 0) {
       const k = 1 - w.reloading / w.reloadTime;

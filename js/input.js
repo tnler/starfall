@@ -9,7 +9,8 @@ const BINDINGS = {
   right: ['KeyD', 'ArrowRight'],
   jump: ['Space'],
   sprint: ['ShiftLeft', 'ShiftRight'],
-  crouch: ['ControlLeft', 'KeyC'],
+  crouch: ['ControlLeft', 'ControlRight'],
+  traversal: ['KeyC'],   // not ShiftRight: that is already sprint
   reload: ['KeyR'],
   melee: ['KeyV'],
   grenade: ['KeyQ'],

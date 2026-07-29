@@ -256,6 +256,108 @@ export const ENEMY_TYPES = {
     damage: 20, range: 18, fireInterval: 1.3, burst: 5, burstGap: 0.1, spread: 3.6, aggro: 140,
     color: 0x9c4a6a, hitColor: 0xff6fb0, blink: true, orbChance: 1, score: 900, shieldColor: 0x6fe0ff,
     build: () => ENEMY_TYPES.captain.build()
+  },
+
+  /* ---- second wave of Riven. Each one exists to punish a habit the first
+     roster let you keep: standing still, backing up, hugging cover, and
+     ignoring the sky. ---- */
+
+  stalker: {
+    id: 'stalker', name: 'Stalker', tier: 'minor',
+    health: 150, shield: 0, speed: 10.6, radius: 0.4, height: 1.75, headY: 1.5, headR: 0.28,
+    damage: 22, range: 2.2, melee: true, fireInterval: 0.8, aggro: 70,
+    color: 0x3d2f52, hitColor: 0xc39dff, blink: true, orbChance: 0.06, score: 30,
+    build: () => mergeParts([
+      { geo: BOX.clone(), matrix: M(0, 0.9, 0, 0.42, 0.9, 0.34), color: 0x2e2440 },
+      { geo: SPH.clone(), matrix: M(0, 1.58, 0.05, 0.34, 0.36, 0.38), color: 0x4a3a66 },
+      { geo: BOX.clone(), matrix: M(0, 1.6, 0.26, 0.26, 0.07, 0.1), color: 0xc39dff },
+      { geo: BOX.clone(), matrix: M(-0.36, 1.0, 0.1, 0.12, 0.7, 0.14, 0.4), color: 0x241c33 },
+      { geo: BOX.clone(), matrix: M(0.36, 1.0, 0.1, 0.12, 0.7, 0.14, -0.4), color: 0x241c33 },
+      { geo: BOX.clone(), matrix: M(0.42, 1.15, -0.2, 0.06, 0.5, 0.06), color: 0xc39dff },
+      { geo: BOX.clone(), matrix: M(-0.2, 0.4, 0, 0.16, 0.8, 0.2), color: 0x2a2038 },
+      { geo: BOX.clone(), matrix: M(0.2, 0.4, 0, 0.16, 0.8, 0.2), color: 0x2a2038 }
+    ])
+  },
+
+  howler: {
+    id: 'howler', name: 'Howler', tier: 'minor',
+    health: 130, shield: 0, speed: 9.2, radius: 0.5, height: 1.6, headY: 1.35, headR: 0.34,
+    damage: 0, range: 3.4, fireInterval: 0.5, aggro: 80,
+    detonate: { fuse: 0.75, radius: 7.5, damage: 88, trigger: 3.6 },
+    color: 0x7a3a1e, hitColor: 0xff8a3c, orbChance: 0.05, score: 35, panics: false,
+    build: () => mergeParts([
+      { geo: SPH.clone(), matrix: M(0, 0.85, 0, 0.62, 0.7, 0.62), color: 0x6b3319 },
+      { geo: SPH.clone(), matrix: M(0, 1.38, 0.04, 0.34, 0.32, 0.36), color: 0x8c4522 },
+      { geo: SPH.clone(), matrix: M(0, 0.9, 0.34, 0.3, 0.3, 0.24), color: 0xff8a3c },
+      { geo: BOX.clone(), matrix: M(-0.3, 0.42, 0, 0.16, 0.72, 0.18), color: 0x4e2412 },
+      { geo: BOX.clone(), matrix: M(0.3, 0.42, 0, 0.16, 0.72, 0.18), color: 0x4e2412 },
+      { geo: CONE.clone(), matrix: M(0, 1.62, 0, 0.22, 0.28, 0.22), color: 0xffc978 }
+    ])
+  },
+
+  sentinel: {
+    id: 'sentinel', name: 'Sentinel', tier: 'minor', flying: true, hover: 5.4,
+    health: 190, shield: 60, speed: 6.4, radius: 0.46, height: 1.1, headY: 0.6, headR: 0.34,
+    damage: 11, range: 30, fireInterval: 2.0, burst: 3, burstGap: 0.14, spread: 2.4,
+    keepDistance: 18, aggro: 95,
+    color: 0x2f4a58, hitColor: 0x6fe0ff, shieldColor: 0x6fe0ff, orbChance: 0.12, score: 45,
+    build: () => mergeParts([
+      { geo: BOX.clone(), matrix: M(0, 0.6, 0, 0.7, 0.26, 0.7, 0.78), color: 0x28414e },
+      { geo: SPH.clone(), matrix: M(0, 0.6, 0, 0.34, 0.34, 0.34), color: 0x1c2c36 },
+      { geo: SPH.clone(), matrix: M(0, 0.6, 0.3, 0.16, 0.16, 0.16), color: 0x6fe0ff },
+      { geo: BOX.clone(), matrix: M(-0.6, 0.6, 0, 0.1, 0.1, 0.5), color: 0x3d5c6c },
+      { geo: BOX.clone(), matrix: M(0.6, 0.6, 0, 0.1, 0.1, 0.5), color: 0x3d5c6c }
+    ])
+  },
+
+  lancer: {
+    id: 'lancer', name: 'Riven Lancer', tier: 'major',
+    health: 420, shield: 220, speed: 4.6, radius: 0.52, height: 2.2, headY: 1.95, headR: 0.3,
+    damage: 68, range: 70, fireInterval: 3.1, telegraph: 1.1, spread: 0.3,
+    keepDistance: 42, aggro: 150,
+    color: 0x4a4470, hitColor: 0xc39dff, shieldColor: 0xc39dff, orbChance: 0.8, score: 140,
+    build: () => mergeParts([
+      { geo: BOX.clone(), matrix: M(0, 1.1, 0, 0.66, 1.1, 0.44), color: 0x35305a },
+      { geo: SPH.clone(), matrix: M(0, 1.96, 0.04, 0.42, 0.42, 0.46), color: 0x4d4780 },
+      { geo: BOX.clone(), matrix: M(0, 2.0, 0.3, 0.34, 0.08, 0.12), color: 0xc39dff },
+      { geo: BOX.clone(), matrix: M(0.5, 1.5, 0.5, 0.1, 0.1, 1.6), color: 0x1f1b33 },
+      { geo: BOX.clone(), matrix: M(0.5, 1.5, 1.3, 0.05, 0.05, 0.3), color: 0xc39dff },
+      { geo: BOX.clone(), matrix: M(-0.28, 0.5, 0, 0.22, 1.0, 0.26), color: 0x2a2648 },
+      { geo: BOX.clone(), matrix: M(0.28, 0.5, 0, 0.22, 1.0, 0.26), color: 0x2a2648 }
+    ])
+  },
+
+  ravager: {
+    id: 'ravager', name: 'Ravager', tier: 'major',
+    health: 1150, shield: 240, speed: 6.8, radius: 0.78, height: 2.7, headY: 2.3, headR: 0.36,
+    damage: 46, range: 3.0, melee: true, fireInterval: 1.4, aggro: 120,
+    color: 0x6b2f22, hitColor: 0xff7a4c, shieldColor: 0xff9a3c, orbChance: 0.9, score: 200,
+    build: () => mergeParts([
+      { geo: BOX.clone(), matrix: M(0, 1.4, 0, 1.15, 1.35, 0.72), color: 0x53241a },
+      { geo: SPH.clone(), matrix: M(0, 2.36, 0.06, 0.5, 0.46, 0.52), color: 0x7d3a29 },
+      { geo: BOX.clone(), matrix: M(0, 2.4, 0.34, 0.4, 0.1, 0.12), color: 0xff7a4c },
+      { geo: BOX.clone(), matrix: M(-1.0, 1.7, 0, 0.42, 1.0, 0.6), color: 0x3d1a13 },
+      { geo: BOX.clone(), matrix: M(1.0, 1.7, 0, 0.42, 1.0, 0.6), color: 0x3d1a13 },
+      { geo: BOX.clone(), matrix: M(-1.15, 0.95, 0.3, 0.3, 0.3, 0.9), color: 0x2b120d },
+      { geo: BOX.clone(), matrix: M(1.15, 0.95, 0.3, 0.3, 0.3, 0.9), color: 0x2b120d },
+      { geo: BOX.clone(), matrix: M(-0.42, 0.6, 0, 0.34, 1.2, 0.36), color: 0x431a12 },
+      { geo: BOX.clone(), matrix: M(0.42, 0.6, 0, 0.34, 1.2, 0.36), color: 0x431a12 }
+    ])
+  },
+
+  seraph: {
+    id: 'seraph', name: 'Seraph', tier: 'major', flying: true, hover: 8.5,
+    health: 700, shield: 400, speed: 7.6, radius: 0.6, height: 1.8, headY: 1.2, headR: 0.36,
+    damage: 34, range: 34, fireInterval: 2.4, spread: 1.2, keepDistance: 24, aggro: 150,
+    projectile: { speed: 30, gravity: 0, radius: 0.45, homing: 1.3, splash: { radius: 4, damage: 40 } },
+    color: 0x584070, hitColor: 0xff6fb0, shieldColor: 0xff6fb0, orbChance: 0.9, score: 220,
+    build: () => mergeParts([
+      { geo: SPH.clone(), matrix: M(0, 1.0, 0, 0.62, 0.62, 0.62), color: 0x40305c },
+      { geo: SPH.clone(), matrix: M(0, 1.0, 0.28, 0.24, 0.24, 0.24), color: 0xff6fb0 },
+      { geo: BOX.clone(), matrix: M(-0.95, 1.25, -0.1, 0.75, 0.08, 0.42, 0.35), color: 0x543f74 },
+      { geo: BOX.clone(), matrix: M(0.95, 1.25, -0.1, 0.75, 0.08, 0.42, -0.35), color: 0x543f74 },
+      { geo: BOX.clone(), matrix: M(0, 0.5, 0, 0.28, 0.5, 0.28), color: 0x2e2244 }
+    ])
   }
 };
 
@@ -445,6 +547,14 @@ export class Enemy {
       this._animate(dt);
       return;
     }
+    // Lit fuse: nothing stops it once it starts, including killing the owner.
+    if (this.fuseT != null) {
+      this.fuseT -= dt;
+      const k = clamp01(this.fuseT / (this.type.detonate.fuse || 0.7));
+      if (this.mesh) this.mesh.scale.setScalar(1 + (1 - k) * 0.35);
+      if (this.fuseT <= 0) { this._detonate(); return; }
+    }
+
     this.stateT -= dt;
     this.flinch = Math.max(0, this.flinch - dt * 1.6);
     this.buffed = Math.max(0, this.buffed - dt);
@@ -578,7 +688,16 @@ export class Enemy {
       return;
     }
     if (this.fireTimer <= 0 && dist < type.range * 1.35) {
-      if (type.melee) {
+      if (type.detonate) {
+        /* Suicide rushers. They close and blow up, which is the one pressure
+           the roster had no answer for: everything else lets you back away and
+           keep shooting. The fuse is deliberately audible and visible so it is
+           a decision to kill it early, not an ambush. */
+        if (dist < (type.detonate.trigger || 3.4) && this.fuseT == null) {
+          this.fuseT = type.detonate.fuse || 0.7;
+          Audio.play('charge', { pos: this.pos, vol: 0.8, dur: this.fuseT });
+        }
+      } else if (type.melee) {
         if (dist < 2.6) {
           this.fireTimer = type.fireInterval;
           Combat.damage(t, type.damage * this.damageMul, { source: this, kind: 'melee' });
@@ -596,6 +715,22 @@ export class Enemy {
         this.fireTimer = type.fireInterval * (0.8 + Math.random() * 0.5);
       }
     }
+  }
+
+  /** Go off. Hurts the player, and hurts whatever it was standing next to. */
+  _detonate() {
+    const d = this.type.detonate;
+    const x = this.pos.x, y = this.pos.y + this.height * 0.5, z = this.pos.z;
+    FX.explosion(_v.set(x, y, z), d.radius, this.hitColor || 0xff8a3c);
+    Audio.play('explode', { pos: _v, vol: 1 });
+    Combat.splash(x, y, z, d.radius, d.damage * this.damageMul, {
+      source: this, kind: 'explosive', mask: FACTION.PLAYER, minFactor: 0.25
+    });
+    // Friendly fire on its own side: crowds of these should thin themselves.
+    Combat.splash(x, y, z, d.radius * 0.7, d.damage * 0.4, {
+      source: this, kind: 'explosive', mask: FACTION.ENEMY, minFactor: 0.2, ignore: this
+    });
+    this.die({ kind: 'detonate' });
   }
 
   _fire(t, heavy = false) {

@@ -50,6 +50,36 @@ function viewModelFor(archId) {
     fusion: [1.1, 0.26], rocket: [1.3, 0.3], gl: [0.95, 0.3], bow: [0.35, 0.1]
   }[archId] || [1.0, 0.16];
 
+  /* Blades are built from a haft and a blade rather than the gun template —
+     a scythe rendered as a receiver with a magazine is not a scythe. */
+  if (d.mode === 'melee') {
+    const steel = 0xc9d4e0, edge = 0xeaf4ff, wrap = 0x2a2118;
+    if (d.id === 'knife') {
+      parts.push({ geo: BOX.clone(), matrix: M4(0, -0.02, 0.06, 0.045, 0.05, 0.16), color: wrap });
+      parts.push({ geo: BOX.clone(), matrix: M4(0, 0.01, -0.16, 0.035, 0.012, 0.28), color: steel });
+      parts.push({ geo: BOX.clone(), matrix: M4(0, 0.01, -0.3, 0.014, 0.01, 0.06), color: edge });
+    } else if (d.id === 'sword') {
+      parts.push({ geo: BOX.clone(), matrix: M4(0, -0.04, 0.1, 0.035, 0.04, 0.2), color: wrap });
+      parts.push({ geo: BOX.clone(), matrix: M4(0, 0, 0, 0.12, 0.03, 0.06), color: 0x3a4250 });   // guard
+      parts.push({ geo: BOX.clone(), matrix: M4(0, 0.01, -0.5, 0.055, 0.016, 0.55), color: steel });
+      parts.push({ geo: BOX.clone(), matrix: M4(0, 0.01, -0.98, 0.02, 0.012, 0.12), color: edge });
+    } else if (d.id === 'axe') {
+      parts.push({ geo: CYL.clone(), matrix: M4(0, -0.02, -0.16, 0.035, 0.42, 0.035, Math.PI / 2), color: wrap });
+      parts.push({ geo: BOX.clone(), matrix: M4(0.1, 0.02, -0.5, 0.16, 0.02, 0.16), color: steel });
+      parts.push({ geo: BOX.clone(), matrix: M4(0.22, 0.02, -0.5, 0.06, 0.014, 0.13), color: edge });
+      parts.push({ geo: BOX.clone(), matrix: M4(0, 0.02, -0.62, 0.03, 0.02, 0.09), color: steel });
+    } else {
+      // scythe: long haft, blade sweeping out to one side
+      parts.push({ geo: CYL.clone(), matrix: M4(0, -0.04, -0.3, 0.03, 0.62, 0.03, Math.PI / 2), color: wrap });
+      parts.push({ geo: BOX.clone(), matrix: M4(0.12, 0.03, -0.86, 0.2, 0.018, 0.07), color: steel });
+      parts.push({ geo: BOX.clone(), matrix: M4(0.34, 0.03, -0.76, 0.1, 0.016, 0.14, -0.5), color: steel });
+      parts.push({ geo: BOX.clone(), matrix: M4(0.44, 0.03, -0.62, 0.05, 0.012, 0.08, -0.9), color: edge });
+    }
+    const geo = mergeParts(parts);
+    VIEW_CACHE.set(archId, geo);
+    return geo;
+  }
+
   parts.push({ geo: BOX.clone(), matrix: M4(0, 0, -L[0] * 0.5, L[1] * 1.1, L[1] * 1.1, L[0]), color: body });
   parts.push({ geo: BOX.clone(), matrix: M4(0, -0.13, 0.06, 0.09, 0.26, 0.14, 0.22), color: 0x1e2128 });   // grip
   parts.push({ geo: BOX.clone(), matrix: M4(0, 0.075, -L[0] * 0.28, 0.05, 0.05, L[0] * 0.5), color: metal }); // rail
@@ -232,6 +262,38 @@ export class Player {
     }
     if (!this.currentWeapon) this.slotIndex = 0;
     this._buildViewModel();
+  }
+
+  /* Rocket jumping. Your own explosive throws you away from the blast, with
+     the vertical component boosted — otherwise firing at your feet does almost
+     nothing, because the blast centre is level with them and the push comes out
+     flat. Costs a little health so it is a real trade, not free flight. */
+  blastImpulse(x, y, z, radius, power) {
+    if (!this.alive) return 0;
+    const cx = this.pos.x, cy = this.pos.y + this.height * 0.5, cz = this.pos.z;
+    const d = Math.hypot(cx - x, cy - y, cz - z);
+    if (d > radius * 1.15) return 0;
+
+    const k = clamp01(1 - d / (radius * 1.15));
+    const falloff = k * k;                    // punchy up close, nothing at the edge
+    _v.set(cx - x, cy - y, cz - z);
+    if (_v.lengthSq() < 1e-4) _v.set(0, 1, 0);
+    _v.normalize();
+    _v.y = _v.y * 0.55 + 0.85;                // bias upward so a floor shot lifts you
+    _v.normalize();
+
+    const push = 30 * falloff;
+    this.velocity.x += _v.x * push;
+    this.velocity.z += _v.z * push;
+    // Never let a blast slam you downward; a rocket under your feet should lift.
+    this.velocity.y = Math.max(this.velocity.y + _v.y * push, _v.y * push * 0.85);
+    this.grounded = false;
+    this.jumpsLeft = Math.max(this.jumpsLeft, 0);
+
+    const self = Math.round(power * 0.10 * falloff);
+    if (self > 0) this.applyDamage(self, { kind: 'explosive', selfInflicted: true });
+    this.shake = Math.max(this.shake, 0.7 * falloff);
+    return push;
   }
 
   /* ---------------------------------------------------------- progression */
@@ -456,6 +518,9 @@ export class Player {
     this.crouched = !!(input && input.down('crouch')) && this.sliding <= 0;
 
     let speed = st.moveSpeed;
+    // Holding a blade is the trade: you give up a primary weapon for legs.
+    const held = this.currentWeapon;
+    if (held && held.def.moveMul) speed *= held.def.moveMul;
     if (this.sprinting) speed *= st.sprintMul;
     if (this.crouched) speed *= 0.55;
     if (this.carrying) speed *= 0.78;
@@ -699,6 +764,7 @@ export class Player {
     if (input.pressed('grenade')) this.abilities.useGrenade();
     if (input.pressed('melee') || input.meleeMouse) this.abilities.useMelee();
     if (input.pressed('classAbility')) this.abilities.useClassAbility(input.down('crouch'));
+    if (input.pressed('traversal')) this.abilities.useTraversal();
     if (input.pressed('super')) {
       if (this.abilities.superReady) this.abilities.useSuper();
       else Audio.play('deny', { vol: 0.4 });
