@@ -1,8 +1,13 @@
 # STARFALL
 
 An open-world co-op FPS in the shape of Destiny. One continuous world — no
-loading screens between anything. Patrol the shore, walk into the dungeon,
-climb the raid spire. Three classes, live loot, and up to 8 guardians per shard.
+loading screens between anything. 3600 units across, built around **the
+Descent**: a shaft bored 780 units toward the core, ringed by eight terraces of
+city and wrapped in a skyline you can see from the far side of the map. A
+spiral road runs the whole way down it.
+
+Patrol the flats, walk into the dungeon, climb the raid spire. Three classes,
+live loot, and up to 8 guardians per shard.
 
 Runs in the browser. No install, no build step, no accounts.
 
@@ -22,6 +27,7 @@ it. If the socket never opens the game runs solo, unchanged.
 /?drop=phantom              pick a class and start
 /?class=oracle&name=Tyler   prefill the menu, still press DROP IN
 /?drop=warden&server=       start solo, no shard
+/?at=520,80                 drop in at any x,z on the surface
 ```
 
 ## Controls
@@ -47,7 +53,10 @@ it. If the socket never opens the game runs solo, unchanged.
 
 ## Content
 
-- **The Sundered Shore** — six regions, ambient patrols, a public event on a
+- **The Descent** — the shaft at the centre of the world. Eight ring terraces
+  of towers hang off a spiral viaduct that is walkable from the rim to the
+  floor, lit the whole way down. You spawn on a pier cantilevered over it.
+- **The Sundered Shore** — eight regions, ambient patrols, a public event on a
   world timer, and a lost sector you walk into.
 - **The Hollow Choir** — a three-encounter dungeon under the shore.
 - **Spire of the Sundered Sky** — a three-encounter raid you climb.
@@ -60,6 +69,7 @@ the game without a screen:
 ```
 npm test           # probe (world, combat, every weapon, every encounter) + UI check
 npm run netcheck   # two guardians on one shard — needs a server running
+node tools/perfcheck.mjs   # build time, draw calls, triangles, streaming cost
 ```
 
 The probe builds the world, benches all 11 weapon archetypes against a live

@@ -7,51 +7,68 @@
    AI and physics can query it without touching a mesh. */
 
 import * as THREE from 'three';
-import { clamp, clamp01, lerp, smoothstep, fbm, ridged, hash2, makeRNG, rayBox } from './util.js';
+import { clamp, clamp01, lerp, smoothstep, fbm, ridged, hash2, makeRNG, rayBox, swapRemove, TAU } from './util.js';
 import { buildInteriors } from './interiors.js';
 
 export const WORLD = {
-  size: 900,          // world spans -450..450 on x and z
-  chunk: 60,          // heightfield mesh chunk size
-  chunkRes: 16,       // quads per chunk edge
+  size: 3600,         // world spans -1800..1800 on x and z
+  chunk: 180,         // heightfield mesh chunk size
+  chunkRes: 30,       // quads per chunk edge (6 units per quad)
   seaLevel: -7,
-  viewDist: 330,
-  propDist: 360
+  viewDist: 1400,     // terrain draw distance
+  propDist: 620,
+  buildDist: 1520,    // chunks are meshed inside this and freed outside it
+  chunksPerFrame: 1   // one chunk is ~7ms; a sprint needs ~53 per 15s, so 1 keeps up
 };
 
 const HALF = WORLD.size / 2;
-const NCH = Math.round(WORLD.size / WORLD.chunk);   // chunks per axis (15)
+const NCH = Math.round(WORLD.size / WORLD.chunk);   // chunks per axis (30)
+
+// The dome has to sit outside the far plane's useful range but inside it, and
+// the fog has to reach the far towers without erasing them.
+export const SKY_R = 9000;
+const FOG_FAR = 2600;
 
 /* --------------------------------------------------------------- regions */
 
 export const REGIONS = [
   {
-    id: 'rally', name: 'The Rally', x: 0, z: 0, r: 78, safe: true,
+    id: 'rally', name: 'The Rally', x: 0, z: 780, r: 150, safe: true,
     ground: 0x6d6a78, rock: 0x565361, accent: 0x8fd8ff,
-    fog: 0x2b3350, sky: 0x1a2140, blurb: 'Last standing outpost. Vendors, transmat, and a view of the Spire.'
+    fog: 0x2b3350, sky: 0x1a2140, blurb: 'Last standing outpost, cut into the Descent’s south rim.'
   },
   {
-    id: 'ashfall', name: 'Ashfall Flats', x: -150, z: 120, r: 165,
+    id: 'descent', name: 'The Descent', x: 0, z: 0, r: 620,
+    ground: 0x3b3746, rock: 0x2a2733, accent: 0xffb45c,
+    fog: 0x1a1626, sky: 0x0d0a16, blurb: 'The shaft to the core. Eight rings of city, and no bottom you can see.'
+  },
+  {
+    id: 'skyreach', name: 'Skyreach', x: -760, z: 620, r: 460,
+    ground: 0x4a4a5c, rock: 0x35354a, accent: 0x6fe0ff,
+    fog: 0x232a44, sky: 0x141a30, blurb: 'Towers stacked on towers. The upper lanes still have power.'
+  },
+  {
+    id: 'ashfall', name: 'Ashfall Flats', x: -640, z: 1240, r: 420,
     ground: 0x8a6b4a, rock: 0x6b503a, accent: 0xffa552,
     fog: 0x4a3327, sky: 0x2a1c18, blurb: 'Dunes of powdered rock. Riven scavenger patrols, and the wind never stops.'
   },
   {
-    id: 'rift', name: 'Verdant Rift', x: 175, z: 135, r: 170,
+    id: 'rift', name: 'Verdant Rift', x: 760, z: 1180, r: 430,
     ground: 0x3f6b3a, rock: 0x39463a, accent: 0x9dff7a,
     fog: 0x22331f, sky: 0x16261c, blurb: 'A drowned canyon gone green. The Riven drop hardest here.'
   },
   {
-    id: 'frost', name: 'Frost Spire Reach', x: -165, z: -180, r: 170,
+    id: 'frost', name: 'Frost Spire Reach', x: -880, z: -760, r: 450,
     ground: 0xa9bacb, rock: 0x5d6a7a, accent: 0x9fe8ff,
     fog: 0x53627a, sky: 0x27334a, blurb: 'Highlands under permanent snow. Marksmen hold the ridges.'
   },
   {
-    id: 'maw', name: 'The Maw', x: 185, z: -195, r: 150,
+    id: 'maw', name: 'The Maw', x: 900, z: -820, r: 400,
     ground: 0x4a3038, rock: 0x33232a, accent: 0xff5d3c,
     fog: 0x3a1a18, sky: 0x1e0f10, blurb: 'A crater burned into the shore. Something sings underneath it.'
   },
   {
-    id: 'spire', name: 'The Sundered Sky', x: 0, z: -330, r: 130,
+    id: 'spire', name: 'The Sundered Sky', x: 0, z: -1320, r: 380,
     ground: 0x4a4560, rock: 0x353048, accent: 0xc39dff,
     fog: 0x2a2140, sky: 0x160f28, blurb: 'The Spire. It fell here, and it is still falling.'
   }
@@ -79,11 +96,39 @@ export function regionAt(x, z) {
 /* ------------------------------------------------------------- landmarks */
 
 // The dungeon mouth sits on the inner wall of the Maw crater.
-export const MAW = { x: 185, z: -195, r: 118, depth: 46 };
+export const MAW = { x: 900, z: -820, r: 118, depth: 46 };
 export const DUNGEON_MOUTH = { x: MAW.x - 74, z: MAW.z + 26 };
 // The raid spire: a 165-unit tower you can see from spawn.
-export const SPIRE = { x: 0, z: -330, r: 92, height: 168 };
-export const LOST_SECTOR = { x: -150, z: -150 };
+export const SPIRE = { x: 0, z: -1320, r: 92, height: 168 };
+export const LOST_SECTOR = { x: -700, z: -320 };
+
+/* The Descent: a shaft bored to the core, ringed by eight terraces of city.
+   The terrain only makes the funnel — the rings, the spiral road and the towers
+   are built geometry, because you have to be able to walk down it. */
+export const PIT = {
+  x: 0, z: 0,
+  r: 620,             // where the funnel meets the surface
+  floorR: 150,        // the flat floor the road lands on
+  depth: 780,         // rim to the lowest ring
+  rings: 8,
+  rimLip: 26,
+  wallExp: 0.55
+};
+
+/** The Rally plateau sits level with the pit apron, on the rim. */
+export const HUB_Y = 42;
+
+/** Height of the funnel wall at a distance from the pit centre. */
+export function pitProfile(d) {
+  if (d >= PIT.r) return 0;
+  if (d <= PIT.floorR) return -PIT.depth;
+  const t = (PIT.r - d) / (PIT.r - PIT.floorR);   // 0 at rim, 1 at the shaft
+  /* Exponent below 1 on purpose. Above 1 gives a saucer that only plunges in
+     the middle, and from the rim you see a wide shallow bowl instead of a
+     shaft. This drops hard at the edge and then opens out, so the wall reads
+     as a cliff the moment you step off. */
+  return -PIT.depth * Math.pow(t, PIT.wallExp);
+}
 
 /* -------------------------------------------------------------- height   */
 
@@ -92,9 +137,12 @@ let SEED = 1337;
 /** Pure analytic terrain height. Everything in the game trusts this. */
 export function heightAt(x, z) {
   const s = SEED;
-  let h = fbm(x * 0.0017, z * 0.0017, { octaves: 4, seed: s }) * 26;
-  h += fbm(x * 0.0062, z * 0.0062, { octaves: 3, seed: s + 91 }) * 7.5;
-  h += fbm(x * 0.021, z * 0.021, { octaves: 2, seed: s + 411 }) * 1.7;
+  // Long wavelengths for a world this size, or it reads as noise up close and
+  // as flat nothing from the rim of the Descent.
+  let h = fbm(x * 0.00052, z * 0.00052, { octaves: 5, seed: s }) * 74;
+  h += fbm(x * 0.0017, z * 0.0017, { octaves: 4, seed: s + 91 }) * 22;
+  h += fbm(x * 0.0062, z * 0.0062, { octaves: 3, seed: s + 411 }) * 6.5;
+  h += fbm(x * 0.021, z * 0.021, { octaves: 2, seed: s + 733 }) * 1.6;
 
   // Frost highlands: ridged spines.
   const frost = regionMask(REGION_BY_ID.frost, x, z);
@@ -137,11 +185,28 @@ export function heightAt(x, z) {
     h += skirt + cone;
   }
 
-  // The Rally: flatten a plateau so the hub reads as built, not grown.
-  const dr = Math.hypot(x, z);
-  if (dr < 130) {
-    const flat = 1 - smoothstep(clamp01((dr - 58) / 62));
-    h = lerp(h, 9, flat);
+  /* The Descent. Everything else is decoration next to this: a funnel 620 wide
+     that drops 780 to an open shaft. The lip is raised so you see the edge
+     before you walk off it, and the walls outside the rim are pushed up so the
+     pit reads as bored through a plateau rather than dented into a plain. */
+  const dp = Math.hypot(x - PIT.x, z - PIT.z);
+  if (dp < PIT.r * 2.1) {
+    const apron = 1 - smoothstep(clamp01((dp - PIT.r) / (PIT.r * 1.05)));
+    h = lerp(h, h * 0.25 + 34, apron * 0.85);
+    if (dp < PIT.r) {
+      const lip = PIT.rimLip * Math.exp(-Math.pow((dp - PIT.r * 0.985) / (PIT.r * 0.035), 2));
+      h = h + pitProfile(dp) + lip;
+    } else {
+      h += PIT.rimLip * Math.exp(-Math.pow((dp - PIT.r * 0.985) / (PIT.r * 0.05), 2));
+    }
+  }
+
+  // The Rally: flatten a plateau so the hub reads as built, not grown. It sits
+  // level with the pit apron so the outpost reads as cut into the rim.
+  const dr = Math.hypot(x - REGION_BY_ID.rally.x, z - REGION_BY_ID.rally.z);
+  if (dr < 190) {
+    const flat = 1 - smoothstep(clamp01((dr - 92) / 88));
+    h = lerp(h, HUB_Y, flat);
   }
 
   return h;
@@ -175,18 +240,24 @@ export class Box {
     this.enabled = true;
     this.top = y + hy;
   }
-  /** World point -> box local space. */
+  /* World point -> box local space.
+
+     This has to be the exact inverse of what THREE does for `mesh.rotation.y`,
+     which sends local +X to world (cos, 0, -sin). Using R(+yaw) here instead of
+     R(-yaw) rotates every collider the opposite way from the box you can see —
+     harmless for a square or a right angle, badly wrong for a long box at an
+     arbitrary angle, which is most of the hub, the raid cover and the pit road. */
   toLocal(px, py, pz, out) {
     const dx = px - this.x, dz = pz - this.z;
-    out.x = dx * this.c + dz * this.s;
+    out.x = dx * this.c - dz * this.s;
     out.y = py - this.y;
-    out.z = -dx * this.s + dz * this.c;
+    out.z = dx * this.s + dz * this.c;
     return out;
   }
   containsXZ(px, pz, pad = 0) {
     const dx = px - this.x, dz = pz - this.z;
-    const lx = dx * this.c + dz * this.s;
-    const lz = -dx * this.s + dz * this.c;
+    const lx = dx * this.c - dz * this.s;
+    const lz = dx * this.s + dz * this.c;
     return Math.abs(lx) <= this.hx + pad && Math.abs(lz) <= this.hz + pad;
   }
   contains(px, py, pz, pad = 0) {
@@ -266,6 +337,7 @@ class WorldSystem {
     this.grid = new ColliderGrid(30);
     this.noTerrain = [];      // volumes where the heightfield does not exist (interiors)
     this.chunks = [];
+    this.chunkMap = new Map();
     this.propCells = [];
     this.pois = [];
     this.triggers = [];
@@ -286,22 +358,43 @@ class WorldSystem {
     this._materials();
     this._sky();
 
+    /* A 3600-unit world is 900 chunks. Meshing them all costs half a million
+       heightAt calls and ~40MB of buffers for terrain you cannot see, so only
+       the ring around the player is ever resident — update() pages the rest in
+       as you walk. Seed the spawn ring here so the first frame is complete. */
+    const spawn = REGION_BY_ID.rally;
+    const seedR = Math.ceil(WORLD.buildDist / WORLD.chunk);
+    const sc = this._chunkCoord(spawn.x, spawn.z);
     let done = 0;
-    const total = NCH * NCH;
-    for (let cx = 0; cx < NCH; cx++) {
-      for (let cz = 0; cz < NCH; cz++) {
-        this._buildChunk(cx, cz);
-        done++;
+    const wanted = [];
+    for (let cx = sc.cx - seedR; cx <= sc.cx + seedR; cx++) {
+      for (let cz = sc.cz - seedR; cz <= sc.cz + seedR; cz++) {
+        if (cx < 0 || cz < 0 || cx >= NCH || cz >= NCH) continue;
+        const c = this._chunkCenter(cx, cz);
+        if (Math.hypot(c.x - spawn.x, c.z - spawn.z) > WORLD.buildDist) continue;
+        wanted.push([cx, cz]);
       }
-      yield { msg: 'Raising terrain', p: 0.02 + 0.6 * (done / total) };
     }
+    for (const [cx, cz] of wanted) {
+      this._buildChunk(cx, cz);
+      if (++done % 24 === 0) yield { msg: 'Raising terrain', p: 0.02 + 0.6 * (done / wanted.length) };
+    }
+    yield { msg: 'Raising terrain', p: 0.62 };
 
     yield { msg: 'Seeding the wilds', p: 0.66 };
     this._buildProps();
 
-    yield { msg: 'Building the Rally', p: 0.78 };
+    yield { msg: 'Building the Rally', p: 0.74 };
     this._buildHub();
     this._buildLandmarks();
+
+    yield { msg: 'Sinking the Descent', p: 0.80 };
+    this._buildPit();
+    this._flushStrips(this.pitGroup);
+
+    yield { msg: 'Raising the skyline', p: 0.86 };
+    this._buildCity();
+    this._flushStrips();
 
     yield { msg: 'Opening the Maw', p: 0.86 };
     this.interiors = buildInteriors(this, scene);
@@ -324,32 +417,117 @@ class WorldSystem {
       metalDark: new THREE.MeshLambertMaterial({ color: 0x3a3f4a, flatShading: true }),
       hull: new THREE.MeshLambertMaterial({ color: 0x8d8577, flatShading: true }),
       glow: new THREE.MeshBasicMaterial({ color: 0x8fd8ff }),
-      glowWarm: new THREE.MeshBasicMaterial({ color: 0xffb45c }),
-      vex: new THREE.MeshLambertMaterial({ color: 0x4b4468, emissive: 0x160f28, flatShading: true })
+      glowWarm: new THREE.MeshBasicMaterial({ color: 0xffb45c, fog: false }),
+      vex: new THREE.MeshLambertMaterial({ color: 0x4b4468, emissive: 0x160f28, flatShading: true }),
+      /* Lit windows and pit lighting. Basic (unlit) so they stay bright at the
+         bottom of a 780-unit hole where nothing else reaches, and fog:false so
+         they punch through it — with fog on, everything more than a couple of
+         rings down washes to a flat purple and the shaft loses all its depth.
+         Night city lights genuinely do read through haze, so this is the
+         physical answer as well as the legible one. */
+      window: new THREE.MeshBasicMaterial({ color: 0xffc978, fog: false }),
+      windowCool: new THREE.MeshBasicMaterial({ color: 0x8fd8ff, fog: false }),
+      pitRing: new THREE.MeshBasicMaterial({ color: 0xff8a3c, fog: false }),
+      pitCore: new THREE.MeshBasicMaterial({ color: 0xffd08a, fog: false }),
+      cityFar: new THREE.MeshLambertMaterial({ color: 0x2c3040, flatShading: true })
     };
   }
 
   _sky() {
     const scene = this.scene;
-    const geo = new THREE.SphereGeometry(1400, 24, 16);
+    /* One dome, one shader, no textures — the page has to stay a single
+       dependency-free download. Everything here is analytic: a three-stop
+       gradient, a sun with a halo, banded nebula from value noise, a ringed
+       planet on the horizon, and a warm bloom off the Descent so the city
+       lights the underside of the sky. */
+    const geo = new THREE.SphereGeometry(SKY_R, 48, 32);
     const mat = new THREE.ShaderMaterial({
       side: THREE.BackSide, depthWrite: false, fog: false,
       uniforms: {
-        top: { value: new THREE.Color(0x0b0f22) },
-        mid: { value: new THREE.Color(0x2a2350) },
+        top: { value: new THREE.Color(0x070a1c) },
+        mid: { value: new THREE.Color(0x1a2140) },
         bot: { value: new THREE.Color(0x6b3f4a) },
-        sunDir: { value: new THREE.Vector3(0.45, 0.28, -0.85).normalize() }
+        nebulaA: { value: new THREE.Color(0x6a3f8f) },
+        nebulaB: { value: new THREE.Color(0x1f5f86) },
+        sunDir: { value: new THREE.Vector3(0.42, 0.22, -0.88).normalize() },
+        planetDir: { value: new THREE.Vector3(-0.72, 0.13, 0.68).normalize() },
+        glowDir: { value: new THREE.Vector3(0, -1, 0) },
+        glowColor: { value: new THREE.Color(0xff8a3c) },
+        glowAmt: { value: 0.0 },
+        time: { value: 0 }
       },
-      vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-      fragmentShader: `
-        uniform vec3 top, mid, bot; uniform vec3 sunDir; varying vec3 vDir;
+      vertexShader: `
+        varying vec3 vDir;
         void main(){
-          float h = clamp(vDir.y * 0.5 + 0.5, 0.0, 1.0);
-          vec3 c = mix(bot, mid, smoothstep(0.42, 0.62, h));
-          c = mix(c, top, smoothstep(0.6, 0.95, h));
-          float sun = pow(max(dot(normalize(vDir), sunDir), 0.0), 220.0);
-          float halo = pow(max(dot(normalize(vDir), sunDir), 0.0), 6.0) * 0.16;
-          c += vec3(1.0, 0.76, 0.5) * (sun * 2.2 + halo);
+          vDir = normalize(position);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: `
+        uniform vec3 top, mid, bot, nebulaA, nebulaB;
+        uniform vec3 sunDir, planetDir, glowDir, glowColor;
+        uniform float glowAmt, time;
+        varying vec3 vDir;
+
+        float hash(vec3 p){ return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+        float noise(vec3 p){
+          vec3 i = floor(p), f = fract(p);
+          f = f * f * (3.0 - 2.0 * f);
+          float n = mix(mix(mix(hash(i), hash(i + vec3(1,0,0)), f.x),
+                            mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
+                        mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x),
+                            mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z);
+          return n;
+        }
+        float fbm(vec3 p){
+          float v = 0.0, a = 0.5;
+          for (int i = 0; i < 5; i++){ v += a * noise(p); p *= 2.03; a *= 0.5; }
+          return v;
+        }
+
+        void main(){
+          vec3 d = normalize(vDir);
+          float h = clamp(d.y * 0.5 + 0.5, 0.0, 1.0);
+
+          // Base gradient, with a tight warm band right at the horizon.
+          vec3 c = mix(bot, mid, smoothstep(0.40, 0.60, h));
+          c = mix(c, top, smoothstep(0.58, 0.96, h));
+          float horizon = exp(-pow((h - 0.5) * 14.0, 2.0));
+          c += bot * horizon * 0.35;
+
+          // Nebula: two tinted bands of fbm, faded out near the horizon so it
+          // never fights the terrain silhouette.
+          float n = fbm(d * 2.6 + vec3(0.0, time * 0.004, 0.0));
+          float n2 = fbm(d * 5.1 - vec3(time * 0.003, 0.0, 0.0));
+          float band = smoothstep(0.52, 0.95, h);
+          c += nebulaA * pow(max(n - 0.42, 0.0), 1.6) * 1.5 * band;
+          c += nebulaB * pow(max(n2 - 0.5, 0.0), 1.8) * 1.1 * band;
+
+          // Stars punched through the nebula, denser high up.
+          float sp = fbm(d * 190.0);
+          float star = smoothstep(0.79, 0.84, sp) * band;
+          float tw = 0.72 + 0.28 * sin(time * 2.1 + sp * 90.0);
+          c += vec3(0.85, 0.9, 1.0) * star * tw * 0.9;
+
+          // Sun: hard disc, soft halo, and a wide warm wash.
+          float sd = max(dot(d, sunDir), 0.0);
+          c += vec3(1.0, 0.78, 0.52) * (pow(sd, 900.0) * 3.4 + pow(sd, 24.0) * 0.30 + pow(sd, 4.0) * 0.07);
+
+          // A ringed planet, because the sky is the one place you can put
+          // something this big and have it cost nothing.
+          float pd = dot(d, planetDir);
+          float disc = smoothstep(0.9975, 0.9982, pd);
+          vec3 pcol = mix(vec3(0.42, 0.30, 0.46), vec3(0.72, 0.55, 0.48),
+                          fbm(d * 34.0 + 11.0));
+          // Terminator: lit from the sun side.
+          float lit = clamp(dot(normalize(sunDir - planetDir * 0.2), d) * 3.0 + 0.55, 0.06, 1.0);
+          c = mix(c, pcol * lit, disc);
+          float ring = smoothstep(0.9955, 0.9962, pd) * (1.0 - disc);
+          c = mix(c, vec3(0.75, 0.66, 0.58) * lit, ring * 0.75);
+
+          // The Descent throwing light up into the haze.
+          float gd = max(dot(d, glowDir), 0.0);
+          c += glowColor * pow(gd, 3.0) * glowAmt;
+
           gl_FragColor = vec4(c, 1.0);
         }`
     });
@@ -357,49 +535,90 @@ class WorldSystem {
     this.skyDome.frustumCulled = false;
     this.skyDome.renderOrder = -100;
     scene.add(this.skyDome);
-
-    // Stars: cheap, and they sell the "sky is broken" premise.
-    const N = 900;
-    const pos = new Float32Array(N * 3);
-    const rng = makeRNG(SEED + 7);
-    for (let i = 0; i < N; i++) {
-      const th = rng() * Math.PI * 2;
-      const ph = Math.acos(rng() * 1.2 - 0.2);
-      const r = 1300;
-      pos[i * 3] = Math.sin(ph) * Math.cos(th) * r;
-      pos[i * 3 + 1] = Math.cos(ph) * r;
-      pos[i * 3 + 2] = Math.sin(ph) * Math.sin(th) * r;
-    }
-    const sg = new THREE.BufferGeometry();
-    sg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    this.stars = new THREE.Points(sg, new THREE.PointsMaterial({ color: 0xdfe7ff, size: 3.4, sizeAttenuation: false, fog: false, transparent: true, opacity: 0.85 }));
-    this.stars.frustumCulled = false;
-    this.stars.renderOrder = -99;
-    scene.add(this.stars);
+    this.skyMat = mat;
 
     this.sun = new THREE.DirectionalLight(0xffd9b0, 1.35);
     this.sun.position.set(220, 180, -420);
     scene.add(this.sun);
     this.hemi = new THREE.HemisphereLight(0x9db4ff, 0x3a2e2a, 0.62);
     scene.add(this.hemi);
-    this.fog = new THREE.Fog(0x2b3350, 60, 520);
+    this.fog = new THREE.Fog(0x2b3350, 120, FOG_FAR);
     scene.fog = this.fog;
   }
 
   _water() {
-    const g = new THREE.PlaneGeometry(WORLD.size * 1.4, WORLD.size * 1.4, 1, 1);
+    /* A ring, not a plane, and it does not follow the player. A full plane at
+       sea level roofs straight over the Descent — from the overlook you see a
+       flat sheet where the shaft should be, which is what "the pit isn't
+       visible" turned out to be. The hole is cut wider than the rim so the
+       edge is always hidden inside the funnel wall. */
+    const g = new THREE.RingGeometry(PIT.r + 30, WORLD.size * 0.78, 96, 1);
     g.rotateX(-Math.PI / 2);
     this.water = new THREE.Mesh(g, new THREE.MeshLambertMaterial({
-      color: 0x1d3a52, transparent: true, opacity: 0.72, emissive: 0x08131e
+      color: 0x1d3a52, transparent: true, opacity: 0.72, emissive: 0x08131e,
+      side: THREE.DoubleSide
     }));
-    this.water.position.y = WORLD.seaLevel;
+    this.water.position.set(PIT.x, WORLD.seaLevel, PIT.z);
     this.water.renderOrder = -1;
     this.scene.add(this.water);
   }
 
   /* -------------------------------------------------------------- chunks */
 
+  _chunkCoord(x, z) {
+    return {
+      cx: clamp(Math.floor((x + HALF) / WORLD.chunk), 0, NCH - 1),
+      cz: clamp(Math.floor((z + HALF) / WORLD.chunk), 0, NCH - 1)
+    };
+  }
+  _chunkCenter(cx, cz) {
+    return { x: -HALF + (cx + 0.5) * WORLD.chunk, z: -HALF + (cz + 0.5) * WORLD.chunk };
+  }
+
+  /** Page terrain in and out around the player. Cheap enough to run every frame. */
+  _streamChunks(playerPos) {
+    const cs = WORLD.chunk;
+    const build2 = WORLD.buildDist * WORLD.buildDist;
+    // Hysteresis: free further out than we build, so standing on a boundary
+    // does not thrash a chunk in and out every frame.
+    const free2 = Math.pow(WORLD.buildDist * 1.25, 2);
+
+    for (let i = this.chunks.length - 1; i >= 0; i--) {
+      const c = this.chunks[i];
+      const dx = c.cx - playerPos.x, dz = c.cz - playerPos.z;
+      if (dx * dx + dz * dz > free2) {
+        this.scene.remove(c.mesh);
+        c.mesh.geometry.dispose();
+        this.chunkMap.delete(c.key);
+        swapRemove(this.chunks, i);
+      }
+    }
+
+    const here = this._chunkCoord(playerPos.x, playerPos.z);
+    const r = Math.ceil(WORLD.buildDist / cs);
+    let budget = WORLD.chunksPerFrame;
+    // Nearest-first, so what you are walking toward exists before the far ring.
+    for (let ring = 0; ring <= r && budget > 0; ring++) {
+      for (let cx = here.cx - ring; cx <= here.cx + ring && budget > 0; cx++) {
+        for (let cz = here.cz - ring; cz <= here.cz + ring && budget > 0; cz++) {
+          // Only the newly added shell of this ring.
+          if (ring > 0 && Math.abs(cx - here.cx) !== ring && Math.abs(cz - here.cz) !== ring) continue;
+          if (cx < 0 || cz < 0 || cx >= NCH || cz >= NCH) continue;
+          const key = cx * NCH + cz;
+          if (this.chunkMap.has(key)) continue;
+          const c = this._chunkCenter(cx, cz);
+          const dx = c.x - playerPos.x, dz = c.z - playerPos.z;
+          if (dx * dx + dz * dz > build2) continue;
+          this._buildChunk(cx, cz);
+          budget--;
+        }
+      }
+    }
+  }
+
   _buildChunk(cx, cz) {
+    const key = cx * NCH + cz;
+    if (this.chunkMap.has(key)) return;
     const res = WORLD.chunkRes;
     const size = WORLD.chunk;
     const ox = -HALF + cx * size;
@@ -440,7 +659,9 @@ class WorldSystem {
     mesh.matrixAutoUpdate = false;
     mesh.updateMatrix();
     this.scene.add(mesh);
-    this.chunks.push({ mesh, cx: ox + size / 2, cz: oz + size / 2 });
+    const rec = { mesh, key, cx: ox + size / 2, cz: oz + size / 2 };
+    this.chunks.push(rec);
+    this.chunkMap.set(key, rec);
   }
 
   _terrainColor(x, z, y, out) {
@@ -607,20 +828,24 @@ class WorldSystem {
   _buildHub() {
     const g = new THREE.Group();
     this.scene.add(g);
-    const y = heightAt(0, 0);
+    // The Rally sits on the Descent's south rim, not at the origin — the origin
+    // is a 780-unit hole now.
+    const HX = REGION_BY_ID.rally.x, HZ = REGION_BY_ID.rally.z;
+    const y = heightAt(HX, HZ);
     this.hubY = y;
+    this.hubX = HX; this.hubZ = HZ;
 
     // Landing pad + ring wall.
-    this.addStructure(0, y - 0.35, 0, 74, 1.1, 74, { mat: 'metalDark', tag: 'floor', parent: g });
+    this.addStructure(HX, y - 0.35, HZ, 74, 1.1, 74, { mat: 'metalDark', tag: 'floor', parent: g });
     for (let i = 0; i < 12; i++) {
       const a = (i / 12) * Math.PI * 2;
       const r = 36;
-      this.addStructure(Math.cos(a) * r, y + 1.6, Math.sin(a) * r, 6, 3.2, 1.6, { yaw: -a, mat: 'metal', tag: 'wall', parent: g });
+      this.addStructure(HX + Math.cos(a) * r, y + 1.6, HZ + Math.sin(a) * r, 6, 3.2, 1.6, { yaw: -a, mat: 'metal', tag: 'wall', parent: g });
     }
     // Central transmat obelisk — the visual anchor of the hub.
-    this.addStructure(0, y + 5, 0, 4, 10, 4, { mat: 'metalDark', tag: 'obelisk', parent: g });
+    this.addStructure(HX, y + 5, HZ, 4, 10, 4, { mat: 'metalDark', tag: 'obelisk', parent: g });
     const core = new THREE.Mesh(new THREE.IcosahedronGeometry(1.7, 1), this.mat.glow);
-    core.position.set(0, y + 12.4, 0);
+    core.position.set(HX, y + 12.4, HZ);
     g.add(core);
     this.hubCore = core;
 
@@ -631,7 +856,7 @@ class WorldSystem {
       { id: 'cryptarch', name: 'Cryptarch Ossa', a: 4.4, color: 0xc39dff }
     ];
     for (const k of kiosks) {
-      const x = Math.cos(k.a) * 22, z = Math.sin(k.a) * 22;
+      const x = HX + Math.cos(k.a) * 22, z = HZ + Math.sin(k.a) * 22;
       this.addStructure(x, y + 1.3, z, 3.4, 2.6, 2.2, { yaw: -k.a, mat: 'metal', tag: 'kiosk', parent: g });
       const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.5, 10, 8), new THREE.MeshBasicMaterial({ color: k.color }));
       lamp.position.set(x, y + 3.2, z);
@@ -639,8 +864,308 @@ class WorldSystem {
       this.addPOI({ id: k.id, name: k.name, kind: 'vendor', x, y: y + 1.4, z, r: 3.6, color: k.color });
     }
 
-    this.addPOI({ id: 'rally', name: 'The Rally', kind: 'travel', x: 0, y: y + 1, z: 6, r: 5, color: 0x8fd8ff, discovered: true });
-    this.spawnPoint = new THREE.Vector3(0, y + 2, 16);
+    this.addPOI({ id: 'rally', name: 'The Rally', kind: 'travel', x: HX, y: y + 1, z: HZ + 6, r: 5, color: 0x8fd8ff, discovered: true });
+
+    /* The overlook. A pier runs from the pad out past the rim lip and stops in
+       mid-air 300 units above the funnel wall — you spawn on the tip of it, so
+       the first thing a new guardian sees is the shaft falling away underneath
+       them. Standing back on the rim you see a horizon; standing on a wide
+       deck you see the deck. It has to be a narrow pier, and you have to be at
+       the end of it. */
+    const TIP = PIT.z + PIT.r - 84;         // well past the lip, over the void
+    const BACK = HZ - 40;
+    const oy = y + 2.5;
+    this.addStructure(HX, oy - 1.2, (BACK + TIP) / 2, 22, 2.0, BACK - TIP,
+      { mat: 'metalDark', tag: 'floor', parent: g });
+    // Side rails stop short of the tip so nothing frames the drop itself.
+    for (const sx of [-11, 11]) {
+      this.addStructure(HX + sx, oy + 1.3, (BACK + TIP) / 2 + 12, 1.4, 2.6, BACK - TIP - 24,
+        { mat: 'metal', tag: 'rail', parent: g });
+      const lamp = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.4, 1.8), this.mat.glow);
+      lamp.position.set(HX + sx, oy + 0.5, TIP + 10);
+      lamp.matrixAutoUpdate = false; lamp.updateMatrix();
+      g.add(lamp);
+    }
+    // A kerb, not a rail: at the lip even a waist-high rail sits across the
+    // exact part of the screen the drop is supposed to fill.
+    this.addStructure(HX, oy + 0.2, TIP + 0.6, 22, 0.4, 1.2, { mat: 'metal', tag: 'rail', parent: g });
+    this.overlook = new THREE.Vector3(HX, oy, TIP + 8);
+    this.spawnPoint = new THREE.Vector3(HX, oy + 0.4, TIP + 4);
+  }
+
+  /* Lit window bands are the single most numerous thing in the skyline — one
+     per band per tower, thousands of them. As individual meshes they cost more
+     draw calls than the entire rest of the world, and they never move, so they
+     get collected during the build and flushed into one InstancedMesh each. */
+  _strip(matName, x, y, z, yaw, sx, sy, sz) {
+    this._strips = this._strips || new Map();
+    let list = this._strips.get(matName);
+    if (!list) { list = []; this._strips.set(matName, list); }
+    list.push([x, y, z, yaw, sx, sy, sz]);
+  }
+
+  _flushStrips(parent) {
+    if (!this._strips) return;
+    const geo = new THREE.BoxGeometry(1, 1, 1);
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const up = new THREE.Vector3(0, 1, 0);
+    const pos = new THREE.Vector3();
+    const scl = new THREE.Vector3();
+    for (const [matName, list] of this._strips) {
+      if (!list.length) continue;
+      const inst = new THREE.InstancedMesh(geo, this.mat[matName], list.length);
+      for (let i = 0; i < list.length; i++) {
+        const [x, y, z, yaw, sx, sy, sz] = list[i];
+        q.setFromAxisAngle(up, yaw);
+        m.compose(pos.set(x, y, z), q, scl.set(sx, sy, sz));
+        inst.setMatrixAt(i, m);
+      }
+      inst.instanceMatrix.needsUpdate = true;
+      (parent || this.scene).add(inst);
+    }
+    this._strips.clear();
+  }
+
+  /* ------------------------------------------------------------- city    */
+
+  /* The skyline around the rim. Two tiers: near towers are real geometry with
+     colliders you can fight around; everything past that is one InstancedMesh
+     of silhouettes, which is what makes a horizon of towers affordable. */
+  _buildCity() {
+    const g = new THREE.Group();
+    this.scene.add(g);
+    const rng = makeRNG(SEED + 909);
+    const hub = REGION_BY_ID.rally;
+
+    const near = [];
+    const far = [];
+    const RING_IN = PIT.r + 70, RING_OUT = PIT.r + 1080;
+
+    for (let i = 0; i < 1500; i++) {
+      const a = rng() * TAU;
+      // Bias toward the rim: the city is densest where the Descent is.
+      const t = Math.pow(rng(), 1.7);
+      const rad = lerp(RING_IN, RING_OUT, t);
+      const x = PIT.x + Math.cos(a) * rad, z = PIT.z + Math.sin(a) * rad;
+      // Keep the hub plaza, the spire and the Maw clear of skyscrapers.
+      if (Math.hypot(x - hub.x, z - hub.z) < 210) continue;
+      if (Math.hypot(x - SPIRE.x, z - SPIRE.z) < SPIRE.r * 2.2) continue;
+      if (Math.hypot(x - MAW.x, z - MAW.z) < MAW.r * 1.9) continue;
+      const y = heightAt(x, z);
+      if (y < WORLD.seaLevel + 3) continue;
+      const closeness = 1 - t;
+      const h = lerp(34, 300, Math.pow(closeness, 1.35) * (0.45 + rng() * 0.75));
+      const w = lerp(12, 46, rng()) * (0.6 + closeness * 0.7);
+      const d = w * (0.65 + rng() * 0.7);
+      const rec = { x, y, z, w, h, d, yaw: rng() * TAU, lit: rng() < 0.72 };
+      if (rad < PIT.r + 420) near.push(rec); else far.push(rec);
+    }
+
+    for (const b of near) {
+      this.addStructure(b.x, b.y + b.h / 2, b.z, b.w, b.h, b.d,
+        { yaw: b.yaw, mat: 'metalDark', tag: 'tower', parent: g });
+      if (!b.lit) continue;
+      const bands = Math.max(1, Math.floor(b.h / 34));
+      for (let k = 0; k < bands; k++) {
+        this._strip(k % 3 === 0 ? 'windowCool' : 'window',
+          b.x, b.y + 12 + (k / bands) * (b.h - 16), b.z, b.yaw,
+          b.w * 1.02, 1.6, b.d * 0.72);
+      }
+    }
+
+    if (far.length) {
+      const geo = new THREE.BoxGeometry(1, 1, 1);
+      const inst = new THREE.InstancedMesh(geo, this.mat.cityFar, far.length);
+      const m = new THREE.Matrix4();
+      const q = new THREE.Quaternion();
+      const up = new THREE.Vector3(0, 1, 0);
+      for (let i = 0; i < far.length; i++) {
+        const b = far[i];
+        q.setFromAxisAngle(up, b.yaw);
+        m.compose(new THREE.Vector3(b.x, b.y + b.h / 2, b.z), q, new THREE.Vector3(b.w, b.h, b.d));
+        inst.setMatrixAt(i, m);
+      }
+      inst.instanceMatrix.needsUpdate = true;
+      inst.frustumCulled = true;
+      g.add(inst);
+      this.cityFar = inst;
+    }
+    this.cityGroup = g;
+  }
+
+  /* ------------------------------------------------------------ the pit  */
+
+  /** Terrain height just outside the rim — the road's zero. */
+  get pitRimY() {
+    if (this._pitRimY == null) this._pitRimY = heightAt(PIT.x + PIT.r + 60, PIT.z);
+    return this._pitRimY;
+  }
+
+  /** Radius of the open shaft at a given depth below the rim. */
+  _shaftRadius(depth) {
+    const t = Math.pow(clamp01(depth / PIT.depth), 1 / PIT.wallExp);
+    return PIT.r - t * (PIT.r - PIT.floorR);
+  }
+
+  /* Where the spiral road is, `turn` counting revolutions from the rim.
+
+     The road is a viaduct, not a shelf: it hangs in the open air of the shaft
+     rather than following the wall, because the wall averages 56° and no
+     gradient cut into it would be walkable. Radius is derived from the shaft
+     profile at the road's own depth, so it can never end up buried in rock —
+     which is exactly what a linear descent did. */
+  _roadAt(turn) {
+    const u = clamp01(turn / PIT.rings);
+    const depth = u * PIT.depth;
+    // Always strictly inside the shaft, or the deck ends up embedded in the
+    // wall near the throat where the funnel closes fastest.
+    const shaft = this._shaftRadius(depth);
+    const r = Math.max(30, Math.min(shaft * 0.86, shaft - 16));
+    const a = turn * TAU + 0.6;
+    return {
+      x: PIT.x + Math.cos(a) * r,
+      z: PIT.z + Math.sin(a) * r,
+      y: this.pitRimY - depth,
+      r, a, u, depth
+    };
+  }
+
+  /* The Descent is the whole point of the skyline, so it is built, not noised:
+     a spiral road you can actually walk from the rim to the shaft, eight ring
+     terraces hung off it, towers growing out of the walls, and a core at the
+     bottom that lights the entire hole from below. */
+  _buildPit() {
+    const g = new THREE.Group();
+    this.scene.add(g);
+    this.pitGroup = g;
+    const rng = makeRNG(SEED + 4242);
+
+    const ROAD_W = 26;
+    const SEGS = 64;                       // segments per revolution
+    const total = PIT.rings * SEGS;
+
+    // --- the spiral road -------------------------------------------------
+    for (let i = 0; i < total; i++) {
+      const a0 = this._roadAt(i / SEGS);
+      const a1 = this._roadAt((i + 1) / SEGS);
+      const mx = (a0.x + a1.x) / 2, mz = (a0.z + a1.z) / 2, my = (a0.y + a1.y) / 2;
+      const len = Math.hypot(a1.x - a0.x, a1.z - a0.z) * 1.12;
+      const yaw = -Math.atan2(a1.z - a0.z, a1.x - a0.x);
+      this.addStructure(mx, my - 1.2, mz, len, 2.4, ROAD_W,
+        { yaw, mat: 'metalDark', tag: 'road', parent: g });
+      // Outer kerb, so you can see the edge before you step off it.
+      if (i % 2 === 0) {
+        const ox = mx + Math.cos(a0.a) * (ROAD_W / 2 - 1), oz = mz + Math.sin(a0.a) * (ROAD_W / 2 - 1);
+        this.addStructure(ox, my + 0.7, oz, len, 1.4, 1.4, { yaw, mat: 'metal', tag: 'kerb', parent: g });
+      }
+      // Lane lighting every so often — this is what makes it read at distance.
+      if (i % 4 === 0) {
+        this._strip('glowWarm',
+          mx - Math.cos(a0.a) * (ROAD_W / 2 - 2), my + 0.4, mz - Math.sin(a0.a) * (ROAD_W / 2 - 2),
+          yaw, len * 0.7, 0.4, 1.2);
+      }
+    }
+
+    // --- support pylons ---------------------------------------------------
+    // The viaduct has to look held up. Drop a leg to the wall every half turn.
+    for (let i = 0; i < PIT.rings * 2; i++) {
+      const p = this._roadAt(i / 2 + 0.25);
+      const wallR = this._shaftRadius(p.depth);
+      const wallY = this.pitRimY - p.depth;
+      const legLen = Math.max(10, (wallR - p.r) * 1.15);
+      const mx = p.x + Math.cos(p.a) * legLen * 0.5;
+      const mz = p.z + Math.sin(p.a) * legLen * 0.5;
+      this.addStructure(mx, wallY - 1.5, mz, legLen, 3.4, 5,
+        { yaw: -p.a, mat: 'metal', tag: 'pylon', parent: g });
+    }
+
+    // --- ring terraces and the city that hangs off them -------------------
+    const TOWER_MATS = ['metalDark', 'metal', 'hull'];
+    for (let ring = 0; ring < PIT.rings; ring++) {
+      const plats = 5 + ring;
+      for (let k = 0; k < plats; k++) {
+        // Anchor each platform to a point ON the road, then push it outward
+        // toward the wall so it reads as a district built off the highway.
+        const turn = ring + (k + 0.5) / plats;
+        const p = this._roadAt(turn);
+        const wallR = this._shaftRadius(p.depth);
+        const out = Math.min(wallR - 6, p.r + 14 + rng() * 26);
+        if (out <= p.r + 4) continue;
+        const px = PIT.x + Math.cos(p.a) * out, pz = PIT.z + Math.sin(p.a) * out;
+        const py = p.y;
+        const w = 22 + rng() * 26, d = 18 + rng() * 20;
+        this.addStructure(px, py - 1.4, pz, w, 2.2, d, { yaw: -p.a, mat: 'metalDark', tag: 'terrace', parent: g });
+
+        // A tower on most of them. They grow UP out of the pit wall, which is
+        // what sells the depth when you look across the shaft.
+        if (rng() < 0.82) {
+          const th = 26 + rng() * 120;
+          const tw = Math.min(w * 0.62, 9 + rng() * 12);
+          const mat = TOWER_MATS[(rng() * TOWER_MATS.length) | 0];
+          this.addStructure(px, py + th / 2, pz, tw, th, tw * (0.7 + rng() * 0.6),
+            { yaw: -p.a, mat, tag: 'tower', parent: g });
+          const bands = Math.max(2, Math.floor(th / 16));
+          for (let b = 0; b < bands; b++) {
+            this._strip('window', px, py + 8 + (b / bands) * (th - 10), pz, -p.a,
+              tw * 1.02, 1.1, tw * 0.74);
+          }
+          this._strip('glowWarm', px, py + th + 2.5, pz, 0, 1.1, 5, 1.1);
+        }
+      }
+
+      // A ring of light around the shaft at every level: the stack of glowing
+      // circles receding into the dark is the whole image.
+      const lvl = this._roadAt(ring);
+      const ringMesh = new THREE.Mesh(new THREE.TorusGeometry(this._shaftRadius(lvl.depth) - 2, 1.1, 5, 96), this.mat.pitRing);
+      ringMesh.rotation.x = Math.PI / 2;
+      ringMesh.position.set(PIT.x, lvl.y + 1.5, PIT.z);
+      ringMesh.matrixAutoUpdate = false; ringMesh.updateMatrix();
+      g.add(ringMesh);
+    }
+
+    /* --- wall seams -------------------------------------------------------
+       Without these the shaft is a black hole with a few orange rings floating
+       in it: the wall faces away from the sun, so between the rings there is
+       nothing for the eye to measure depth against. Lit seams running the full
+       drop give the wall a scale and make the bottom feel far away rather than
+       simply dark. They are batched, so 30 seams cost one draw call. */
+    const SEAMS = 30;
+    for (let sIdx = 0; sIdx < SEAMS; sIdx++) {
+      const a = (sIdx / SEAMS) * TAU + 0.21;
+      const steps = 30;
+      for (let k = 1; k <= steps; k++) {
+        const depth = (k / steps) * PIT.depth;
+        const wr = this._shaftRadius(depth) - 1.5;
+        const x = PIT.x + Math.cos(a) * wr, z = PIT.z + Math.sin(a) * wr;
+        // Alternate warm and cool so the wall reads as inhabited, not a strip light.
+        const cool = (sIdx + k) % 5 === 0;
+        this._strip(cool ? 'windowCool' : 'window', x, this.pitRimY - depth, z, -a,
+          1.6, 3.2 + (k % 3) * 1.4, 5.5);
+      }
+    }
+
+    // --- the core --------------------------------------------------------
+    const floorY = this._roadAt(PIT.rings).y - 26;
+    this.addStructure(PIT.x, floorY - 3, PIT.z, PIT.floorR * 2.1, 6, PIT.floorR * 2.1,
+      { mat: 'metalDark', tag: 'pitfloor', parent: g });
+    const core = new THREE.Mesh(new THREE.IcosahedronGeometry(PIT.floorR * 0.44, 2), this.mat.pitCore);
+    core.position.set(PIT.x, floorY + PIT.floorR * 0.4, PIT.z);
+    g.add(core);
+    this.pitCore = core;
+    this.pitFloorY = floorY;
+
+    // A light down there so the bottom is lit from inside the hole.
+    const coreLight = new THREE.PointLight(0xff9a3c, 3.2, PIT.depth * 1.4, 1.4);
+    coreLight.position.set(PIT.x, floorY + 40, PIT.z);
+    g.add(coreLight);
+    this.pitLight = coreLight;
+
+    this.addPOI({
+      id: 'descent', name: 'The Descent', kind: 'travel',
+      x: this._roadAt(0.04).x, y: this._roadAt(0.04).y + 1, z: this._roadAt(0.04).z,
+      r: 7, color: 0xffb45c
+    });
   }
 
   _buildLandmarks() {
@@ -721,9 +1246,9 @@ class WorldSystem {
       if (b.tag === 'trigger') continue;
       // Transform ray into box space (yaw only).
       const rx = ox - b.x, rz = oz - b.z;
-      const lx = rx * b.c + rz * b.s, lz = -rx * b.s + rz * b.c;
+      const lx = rx * b.c - rz * b.s, lz = rx * b.s + rz * b.c;
       const ly = oy - b.y;
-      const ldx = dx * b.c + dz * b.s, ldz = -dx * b.s + dz * b.c;
+      const ldx = dx * b.c - dz * b.s, ldz = dx * b.s + dz * b.c;
       const t = rayBox(lx, ly, lz, ldx, dy, ldz,
         { x: -b.hx, y: -b.hy, z: -b.hz }, { x: b.hx, y: b.hy, z: b.hz });
       if (t >= 0 && t < bestDist) { bestDist = t; hitBox = b; }
@@ -789,9 +1314,9 @@ class WorldSystem {
     if (ax > ay && ax > az) n.set(Math.sign(_l.x), 0, 0);
     else if (ay > az) n.set(0, Math.sign(_l.y), 0);
     else n.set(0, 0, Math.sign(_l.z));
-    // back to world
-    const wx = n.x * b.c - n.z * b.s;
-    const wz = n.x * b.s + n.z * b.c;
+    // back to world (transpose of toLocal's rotation)
+    const wx = n.x * b.c + n.z * b.s;
+    const wz = -n.x * b.s + n.z * b.c;
     return n.set(wx, n.y, wz).normalize();
   }
 
@@ -810,7 +1335,9 @@ class WorldSystem {
     this._t += dt;
     if (!this.ready) return;
 
-    // Distance culling. Frustum culling handles the rest.
+    // Page terrain around the player, then distance-cull what is resident.
+    // Frustum culling handles the rest.
+    this._streamChunks(playerPos);
     const vd = WORLD.viewDist, vd2 = vd * vd;
     for (const c of this.chunks) {
       const dx = c.cx - playerPos.x, dz = c.cz - playerPos.z;
@@ -823,21 +1350,39 @@ class WorldSystem {
       for (const m of cell.meshes) m.visible = vis;
     }
 
-    if (this.skyDome) this.skyDome.position.set(playerPos.x, 0, playerPos.z);
-    if (this.stars) { this.stars.position.set(playerPos.x, 0, playerPos.z); this.stars.rotation.y = this._t * 0.004; }
-    if (this.water) this.water.position.set(playerPos.x, WORLD.seaLevel + Math.sin(this._t * 0.6) * 0.12, playerPos.z);
+    if (this.skyDome) this.skyDome.position.set(playerPos.x, playerPos.y, playerPos.z);
+    if (this.water) this.water.position.y = WORLD.seaLevel + Math.sin(this._t * 0.6) * 0.12;
     if (this.hubCore) { this.hubCore.rotation.y = this._t * 0.6; this.hubCore.position.y = this.hubY + 12.4 + Math.sin(this._t * 1.2) * 0.3; }
+    if (this.pitCore) {
+      this.pitCore.rotation.y = this._t * 0.12;
+      this.pitCore.rotation.x = Math.sin(this._t * 0.2) * 0.12;
+      const pulse = 0.85 + Math.sin(this._t * 0.9) * 0.15;
+      if (this.pitLight) this.pitLight.intensity = 3.2 * pulse;
+    }
 
     // Fog and sky tint follow the region you are standing in.
     const reg = regionAt(playerPos.x, playerPos.z);
     if (reg !== this._lastRegion) this._lastRegion = reg;
     const target = new THREE.Color(reg.fog);
     this.fog.color.lerp(target, 1 - Math.exp(-0.8 * dt));
-    if (this.skyDome) this.skyDome.material.uniforms.mid.value.lerp(new THREE.Color(reg.sky), 1 - Math.exp(-0.5 * dt));
+    if (this.skyMat) {
+      const u = this.skyMat.uniforms;
+      u.mid.value.lerp(_c1.setHex(reg.sky), 1 - Math.exp(-0.5 * dt));
+      u.time.value = this._t;
+      // Near the Descent the sky picks up the glow coming out of the hole.
+      const dPit = Math.hypot(playerPos.x - PIT.x, playerPos.z - PIT.z);
+      const wantGlow = clamp01(1 - dPit / (PIT.r * 2.4)) * 0.5;
+      u.glowAmt.value = lerp(u.glowAmt.value, wantGlow, 1 - Math.exp(-1.5 * dt));
+      // Point the bloom at the pit, so it sits in the right part of the sky.
+      if (dPit > 1) {
+        _vTmp.set(PIT.x - playerPos.x, -Math.max(40, playerPos.y - this.pitFloorY) * 0.5, PIT.z - playerPos.z).normalize();
+        u.glowDir.value.lerp(_vTmp, 1 - Math.exp(-2 * dt));
+      }
+    }
     // Underground, pull the fog in tight: the dungeon should feel enclosed.
     const inside = !this.terrainActive(playerPos.x, playerPos.y, playerPos.z);
     this.inside = inside;
-    const near = inside ? 2 : 60, far = inside ? 95 : 520;
+    const near = inside ? 2 : 120, far = inside ? 95 : FOG_FAR;
     this.fog.near = lerp(this.fog.near, near, 1 - Math.exp(-2 * dt));
     this.fog.far = lerp(this.fog.far, far, 1 - Math.exp(-2 * dt));
     if (inside) this.fog.color.lerp(new THREE.Color(0x120a14), 1 - Math.exp(-2 * dt));

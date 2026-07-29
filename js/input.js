@@ -29,6 +29,11 @@ const BINDINGS = {
   debug: ['Backquote']
 };
 
+/* Anything past this in one event is a glitch, not a flick. */
+const SPIKE = 900;
+const clampNum = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+const SENS_KEY = 'starfall.sens.v1';
+
 class InputManager {
   constructor() {
     this.enabled = false;
@@ -43,6 +48,8 @@ class InputManager {
     this._wheel = 0;
     this.sensitivity = 0.0022;
     this.invertY = false;
+    this.rawMouse = false;         // did unadjustedMovement take?
+    this._settleT = 0;             // events to swallow after a lock change
     this.captureText = false;      // chat mode: swallow keys
     this.textBuffer = '';
     this.onText = null;            // (line|null) when chat closes
@@ -51,10 +58,21 @@ class InputManager {
     this._handlers = [];
   }
 
+  /** 0.1 .. 3.0, where 1 is the default feel. Persisted across sessions. */
+  get sensScale() { return this.sensitivity / 0.0022; }
+  setSensScale(v) {
+    this.sensitivity = 0.0022 * clampNum(v, 0.1, 3);
+    try { localStorage.setItem(SENS_KEY, String(this.sensScale)); } catch (e) { /* private mode */ }
+  }
+
   init(el) {
     if (typeof document === 'undefined') return;
     this.el = el;
     this.enabled = true;
+    try {
+      const saved = parseFloat(localStorage.getItem(SENS_KEY));
+      if (isFinite(saved)) this.sensitivity = 0.0022 * clampNum(saved, 0.1, 3);
+    } catch (e) { /* private mode */ }
 
     const on = (target, type, fn, opts) => {
       target.addEventListener(type, fn, opts);
@@ -70,8 +88,16 @@ class InputManager {
     on(document, 'mouseup', e => { if (e.button < 3) this.mouseDown[e.button] = false; });
     on(document, 'mousemove', e => {
       if (!this.locked) return;
-      this._dx += e.movementX || 0;
-      this._dy += e.movementY || 0;
+      let mx = e.movementX || 0, my = e.movementY || 0;
+      // Chrome can deliver one enormous delta on the frame pointer lock engages
+      // (and after alt-tab), which reads as the view being ripped away. A real
+      // flick is well under this even on a high-DPI mouse.
+      if (this._settleT > 0 || Math.abs(mx) > SPIKE || Math.abs(my) > SPIKE) {
+        if (this._settleT > 0) this._settleT--;
+        if (Math.abs(mx) > SPIKE || Math.abs(my) > SPIKE) return;
+      }
+      this._dx += mx;
+      this._dy += my;
     });
     on(document, 'wheel', e => {
       if (!this.locked) return;
@@ -80,6 +106,10 @@ class InputManager {
     }, { passive: false });
     on(document, 'pointerlockchange', () => {
       this.locked = document.pointerLockElement === this.el;
+      // Drop the first couple of events after (re)locking, and any look delta
+      // that queued up while we were unlocked.
+      this._settleT = 2;
+      this._dx = 0; this._dy = 0;
       if (!this.locked) { this.keys.clear(); this.mouseDown = [false, false, false]; }
     });
     on(window, 'blur', () => { this.keys.clear(); this.mouseDown = [false, false, false]; });
@@ -92,10 +122,26 @@ class InputManager {
     this._handlers.length = 0;
   }
 
+  /* Raw input. Without unadjustedMovement the browser hands us deltas that
+     Windows has already run through its pointer-acceleration curve, so the same
+     physical flick turns a different amount depending how fast you moved. That
+     is the "not smooth" everyone feels and no amount of sensitivity tuning
+     fixes. It returns a promise that rejects where unsupported (Safari, older
+     Chrome), so fall back to a plain lock. */
   lock() {
     if (!this.el || this.locked) return;
-    const p = this.el.requestPointerLock();
-    if (p && p.catch) p.catch(() => {});
+    let p;
+    try {
+      p = this.el.requestPointerLock({ unadjustedMovement: true });
+    } catch (e) {
+      p = null;
+    }
+    if (p && p.catch) {
+      p.then(() => { this.rawMouse = true; }).catch(() => {
+        this.rawMouse = false;
+        try { const q = this.el.requestPointerLock(); if (q && q.catch) q.catch(() => {}); } catch (e2) { /* gone */ }
+      });
+    }
   }
   unlock() { if (typeof document !== 'undefined' && document.exitPointerLock) document.exitPointerLock(); }
 

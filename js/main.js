@@ -6,7 +6,7 @@ import { clamp, clamp01, lerp, makeRNG, Avg } from './util.js';
 import Input from './input.js';
 import Audio from './audio.js';
 import FX from './fx.js';
-import World, { heightAt, regionAt, REGIONS } from './world.js';
+import World, { heightAt, regionAt, REGIONS, PIT } from './world.js';
 import Combat from './combat.js';
 import { Projectiles } from './weapons.js';
 import Enemies, { ENEMY_TYPES } from './enemies.js';
@@ -47,7 +47,9 @@ function boot() {
 
   const scene = new THREE.Scene();
   game.scene = scene;
-  const camera = new THREE.PerspectiveCamera(78, window.innerWidth / window.innerHeight, 0.06, 2000);
+  // Far plane has to clear the sky dome, or the top of the world gets clipped
+  // the moment you look up from the bottom of the Descent.
+  const camera = new THREE.PerspectiveCamera(78, window.innerWidth / window.innerHeight, 0.08, 14000);
   scene.add(camera);
   game.camera = camera;
 
@@ -108,8 +110,22 @@ function finishStart(opts, inventory, progress) {
 
   const player = new Player(opts.classId, inventory, progress);
   player.name = opts.name || 'Guardian';
-  const sp = World.spawnPoint;
+  const sp = World.spawnPoint.clone();
+  // ?at=x,z drops you anywhere on the surface — for looking at the far side of
+  // a 3600-unit world without walking there first.
+  const at = new URLSearchParams(location.search).get('at');
+  if (at) {
+    const [ax, az] = at.split(',').map(Number);
+    if (isFinite(ax) && isFinite(az)) {
+      const y = World.supportY(ax, heightAt(ax, az) + 90, az, 220);
+      sp.set(ax, (isFinite(y) ? y : heightAt(ax, az)) + 2.2, az);
+    }
+  }
   player.spawnAt(sp.x, sp.y, sp.z);
+  // Face the Descent, and start tilted down over the rail. The first thing a
+  // new guardian should see is the hole, not the horizon above it.
+  player.yaw = Math.atan2(-(PIT.x - sp.x), -(PIT.z - sp.z));
+  if (!at) player.pitch = -0.26;
   player.attachCamera(game.camera);
   game.player = player;
 

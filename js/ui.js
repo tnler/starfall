@@ -102,7 +102,9 @@ class UISystem {
     wrap.querySelector('#startbtn').onclick = start;
     wrap.addEventListener('keydown', e => { if (e.key === 'Enter') start(); });
     setTimeout(() => wrap.querySelector('#startbtn').focus(), 30);
-    if (q.has('drop')) start();
+    // `at` implies a drop: it is a single-parameter URL on purpose, because an
+    // '&' in an argument breaks headless-Chrome invocation.
+    if (q.has('drop') || q.has('at')) start();
   }
 
   /* ------------------------------------------------------------- panels */
@@ -464,9 +466,16 @@ class UISystem {
       return row;
     };
 
-    box.appendChild(mkSlider('Look sensitivity', 0.0005, 0.006, 0.0001, g.input.sensitivity,
-      v => { g.input.sensitivity = v; }, v => (v * 1000).toFixed(1)));
+    box.appendChild(mkSlider('Look sensitivity', 0.1, 3, 0.05, g.input.sensScale,
+      v => g.input.setSensScale(v), v => v.toFixed(2) + '×'));
     box.appendChild(mkSlider('Master volume', 0, 1, 0.05, Audio.masterVol, v => Audio.setVolume(v), v => Math.round(v * 100) + '%'));
+
+    // Worth surfacing: if raw input did not take, the OS is still curving the
+    // mouse and no sensitivity value will make it feel consistent.
+    const rawRow = el('div', 'setrow');
+    rawRow.innerHTML = '<span>Raw mouse input</span>';
+    rawRow.appendChild(el('em', null, g.input.rawMouse ? 'on — OS acceleration bypassed' : 'unavailable in this browser'));
+    box.appendChild(rawRow);
 
     const invRow = el('div', 'setrow');
     invRow.innerHTML = '<span>Invert look</span>';

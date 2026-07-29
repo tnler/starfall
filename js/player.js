@@ -427,10 +427,14 @@ export class Player {
   _move(dt, input) {
     const st = this.stats;
     const mv = input ? input.moveAxis(_v2) : { x: 0, z: 0 };
-    // World-space desired direction.
+    // World-space desired direction, in the camera's basis:
+    //   forward = (-sin, 0, -cos)   right = (cos, 0, -sin)
+    // and moveAxis gives z=-1 for forward, so world = mv.x*right - mv.z*forward.
+    // Getting these signs wrong only shows up once you turn — at yaw 0 the wrong
+    // basis agrees with the right one, and at 90° it is exactly backwards.
     const sin = Math.sin(this.yaw), cos = Math.cos(this.yaw);
-    const wx = mv.x * cos - mv.z * sin;
-    const wz = mv.x * sin + mv.z * cos;
+    const wx = mv.x * cos + mv.z * sin;
+    const wz = mv.z * cos - mv.x * sin;
     this.moveDir.set(wx, 0, wz);
     const moving = Math.abs(wx) + Math.abs(wz) > 0.01;
 

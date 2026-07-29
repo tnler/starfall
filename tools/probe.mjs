@@ -90,7 +90,7 @@ function guard(label, fn) {
 }
 
 const THREE = await import('three');
-const { World, heightAt, regionAt, REGIONS, WORLD } = await import('../js/world.js');
+const { World, heightAt, regionAt, REGIONS, WORLD, MAW, SPIRE, PIT } = await import('../js/world.js');
 const { default: Combat, FACTION } = await import('../js/combat.js');
 const { default: FX } = await import('../js/fx.js');
 const { default: Audio } = await import('../js/audio.js');
@@ -128,10 +128,92 @@ HUD.init(fakeElement('canvas'), {});
 /* ------------------------------------------------------ world sanity   */
 
 check('heightAt is deterministic', heightAt(12.5, -40.25) === heightAt(12.5, -40.25));
-check('hub is flat', Math.abs(heightAt(0, 0) - heightAt(20, 12)) < 2.5,
-  `${heightAt(0, 0).toFixed(2)} vs ${heightAt(20, 12).toFixed(2)}`);
-check('spire is tall', heightAt(0, -330) > 120, `${heightAt(0, -330).toFixed(1)}`);
-check('maw is a crater', heightAt(185, -195) < heightAt(185 + 130, -195), `${heightAt(185, -195).toFixed(1)}`);
+// Read the landmarks rather than hardcoding coordinates: these all silently
+// tested empty terrain the moment the world was rescaled.
+const HUB = REGIONS.find(r => r.id === 'rally');
+check('hub is flat', Math.abs(heightAt(HUB.x, HUB.z) - heightAt(HUB.x + 20, HUB.z + 12)) < 2.5,
+  `${heightAt(HUB.x, HUB.z).toFixed(2)} vs ${heightAt(HUB.x + 20, HUB.z + 12).toFixed(2)}`);
+check('spire is tall', heightAt(SPIRE.x, SPIRE.z) > heightAt(SPIRE.x + SPIRE.r * 2.6, SPIRE.z) + 120,
+  `${heightAt(SPIRE.x, SPIRE.z).toFixed(1)} vs ${heightAt(SPIRE.x + SPIRE.r * 2.6, SPIRE.z).toFixed(1)}`);
+check('maw is a crater', heightAt(MAW.x, MAW.z) < heightAt(MAW.x + MAW.r * 1.1, MAW.z),
+  `${heightAt(MAW.x, MAW.z).toFixed(1)}`);
+
+/* The Descent is the centrepiece; if the funnel stops being a funnel the whole
+   skyline is wrong and nothing else in this file would notice. */
+check('the pit is deep', heightAt(PIT.x, PIT.z) < heightAt(PIT.x + PIT.r * 1.6, PIT.z) - PIT.depth * 0.8,
+  `floor ${heightAt(PIT.x, PIT.z).toFixed(0)} vs rim ${heightAt(PIT.x + PIT.r * 1.6, PIT.z).toFixed(0)}`);
+{
+  // Monotonic descent: every step inward must go down, or there are ledges the
+  // funnel maths did not intend and players will get stuck on them.
+  let rises = 0, prev = Infinity;
+  for (let d = PIT.r - 4; d >= 0; d -= 8) {
+    const y = heightAt(PIT.x + d, PIT.z);
+    if (y > prev + 0.5) rises++;
+    prev = y;
+  }
+  check('the pit funnels inward without ledges', rises === 0, `${rises} rises walking in`);
+}
+/* A collider has to sit exactly where its mesh is drawn. The two used opposite
+   yaw conventions, which is invisible for a square or a right angle and badly
+   wrong for a long box at any other angle — so you collided with walls that
+   were not where you could see them. */
+{
+  const probe = new THREE.Object3D();
+  let worst = 0, worstYaw = 0;
+  for (let deg = 0; deg < 360; deg += 11) {
+    const yaw = (deg * Math.PI) / 180;
+    // A deliberately long, thin box: a square cannot show this bug.
+    const box = new (Object.getPrototypeOf(World.grid.all[0]).constructor)(0, 0, 0, 30, 2, 3, yaw, 'test');
+    probe.rotation.set(0, yaw, 0);
+    probe.updateMatrixWorld(true);
+    // Walk the mesh's own local +X axis out to near the end of the box.
+    const tip = new THREE.Vector3(26, 0, 0).applyMatrix4(probe.matrixWorld);
+    if (!box.containsXZ(tip.x, tip.z, 0.01)) { worst++; worstYaw = deg; }
+    // And a point off the mesh's local +Z must be outside.
+    const side = new THREE.Vector3(0, 0, 12).applyMatrix4(probe.matrixWorld);
+    if (box.containsXZ(side.x, side.z, 0.01)) { worst++; worstYaw = deg; }
+  }
+  check('colliders sit where their mesh is drawn', worst === 0,
+    `${worst} mismatches, e.g. yaw ${worstYaw}°`);
+}
+
+/* The spiral road is the only way down. It has to stay in open air (a linear
+   descent buried it in the funnel wall), stay walkable, and hold the player up. */
+{
+  let buried = 0, steepest = 0, unsupported = 0, samples = 0;
+  let prev = null;
+  for (let turn = 0; turn <= PIT.rings; turn += 1 / 32) {
+    const p = World._roadAt(turn);
+    samples++;
+    // In open air: the deck plus its width must clear the shaft wall. Compare
+    // against the funnel profile rather than heightAt, because at the very
+    // bottom the road correctly lands ON the floor.
+    if (p.depth < PIT.depth - 40 && p.r + 13 > World._shaftRadius(p.depth)) buried++;
+    // Walkable: gradient between consecutive segments.
+    if (prev) {
+      const run = Math.hypot(p.x - prev.x, p.z - prev.z);
+      const rise = Math.abs(p.y - prev.y);
+      if (run > 0.01) steepest = Math.max(steepest, Math.atan2(rise, run) * 180 / Math.PI);
+    }
+    prev = p;
+    // Standable: a support probe from just above the deck must land on it.
+    const sy = World.supportY(p.x, p.y + 4, p.z, 9);
+    if (!isFinite(sy) || sy < p.y - 1.5 || sy > p.y + 6) unsupported++;
+  }
+  check('the spiral road stays in open air', buried === 0, `${buried}/${samples} segments inside rock`);
+  check('the spiral road is walkable', steepest < 22, `steepest ${steepest.toFixed(1)}°`);
+  // Tolerance is generous upward on purpose: kerbs and terrace lips sit a few
+  // units proud of the deck, and standing on those is fine. What must never
+  // happen is finding no support at all, or support below the deck — a hole.
+  check('the spiral road holds you up', unsupported === 0, `${unsupported}/${samples} segments with no deck`);
+  const top = World._roadAt(0), bottom = World._roadAt(PIT.rings);
+  check('the road reaches the bottom', bottom.y < top.y - PIT.depth * 0.9,
+    `${top.y.toFixed(0)} -> ${bottom.y.toFixed(0)}`);
+}
+
+check('the hub sits on the rim, not in the hole',
+  heightAt(HUB.x, HUB.z) > heightAt(PIT.x, PIT.z) + PIT.depth * 0.8,
+  `hub ${heightAt(HUB.x, HUB.z).toFixed(0)} vs floor ${heightAt(PIT.x, PIT.z).toFixed(0)}`);
 check('regions resolve', REGIONS.every(r => regionAt(r.x, r.z).id === r.id),
   REGIONS.map(r => regionAt(r.x, r.z).id).join(','));
 
@@ -152,8 +234,9 @@ for (const [name, plat] of Object.entries(spec.raid.platforms)) {
 }
 
 // Raycast must hit the ground when fired down, and nothing when fired at sky.
-// Sample well away from the hub so the obelisk is not in the way.
-const RX = 220, RZ = 240;
+// Sample out on the open flats: the old point is under the Descent's road now,
+// and anywhere near the city has a tower over it.
+const RX = -1400, RZ = -1400;
 const down = guard('raycast down', () => World.raycast(RX, heightAt(RX, RZ) + 30, RZ, 0, -1, 0, 100));
 check('raycast hits terrain', !!down && Math.abs(down.point.y - heightAt(RX, RZ)) < 1.5,
   down ? `y=${down.point.y.toFixed(2)} vs ${heightAt(RX, RZ).toFixed(2)}` : 'no hit');
@@ -268,10 +351,64 @@ function frame(dt, keys = [], mouse = [false, false, false], look = [0, 0]) {
 /* Falling through the floor is the bug that ruins everything else. */
 const startY = player.pos.y;
 for (let i = 0; i < 120; i++) frame(1 / 60);
-check('player lands on the hub', Math.abs(player.pos.y - heightAt(player.pos.x, player.pos.z)) < 1.2,
-  `y=${player.pos.y.toFixed(2)} ground=${heightAt(player.pos.x, player.pos.z).toFixed(2)}`);
+// Spawn is on the overlook deck, which is above the terrain on purpose — so
+// this has to check for solid support, not for the heightfield specifically.
+{
+  const sup = World.supportY(player.pos.x, player.pos.y + 1.5, player.pos.z, 3);
+  check('player lands on solid ground at spawn', isFinite(sup) && Math.abs(player.pos.y - sup) < 1.2,
+    `y=${player.pos.y.toFixed(2)} support=${isFinite(sup) ? sup.toFixed(2) : 'none'}`);
+  check('spawn overlooks the pit',
+    World.overlook && Math.hypot(World.overlook.x - PIT.x, World.overlook.z - PIT.z) < PIT.r + 10,
+    World.overlook ? `${Math.hypot(World.overlook.x - PIT.x, World.overlook.z - PIT.z).toFixed(0)} from centre, rim ${PIT.r}` : 'no overlook');
+}
 
-// Walk for a while across open world; must never fall out of the world.
+/* W must send you where you are LOOKING, at every heading. The old basis had
+   the sin terms negated, which agrees with the camera at yaw 0 and is exactly
+   backwards at 90° — so walking felt random the moment you turned, and no test
+   noticed because they all only checked that the player moved at all. */
+{
+  const flatAim = new THREE.Vector3();
+  const moved = new THREE.Vector3();
+  let worstDot = 1, worstYaw = 0;
+  let worstStrafe = 1, worstStrafeYaw = 0;
+  for (let deg = 0; deg < 360; deg += 15) {
+    for (const [keys, label] of [[['KeyW'], 'forward'], [['KeyD'], 'right']]) {
+      player.respawn(sp.x, sp.y + 1, sp.z);
+      player.velocity.set(0, 0, 0);
+      player.yaw = (deg * Math.PI) / 180;
+      player.pitch = 0;
+      const from = player.pos.clone();
+      for (let i = 0; i < 24; i++) frame(1 / 60, keys);
+      moved.subVectors(player.pos, from).setY(0);
+      if (moved.lengthSq() < 1e-4) { errors.push(`no movement at yaw ${deg} (${label})`); continue; }
+      moved.normalize();
+      flatAim.copy(player.aimDir).setY(0).normalize();
+      // Right is the aim vector turned -90° about Y.
+      const want = label === 'forward'
+        ? flatAim
+        : flatAim.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), -Math.PI / 2);
+      const dot = moved.dot(want);
+      if (label === 'forward' && dot < worstDot) { worstDot = dot; worstYaw = deg; }
+      if (label === 'right' && dot < worstStrafe) { worstStrafe = dot; worstStrafeYaw = deg; }
+    }
+  }
+  check('W walks where the camera looks, at every heading', worstDot > 0.9,
+    `worst alignment ${worstDot.toFixed(3)} at yaw ${worstYaw}°`);
+  check('D strafes right, at every heading', worstStrafe > 0.9,
+    `worst alignment ${worstStrafe.toFixed(3)} at yaw ${worstStrafeYaw}°`);
+  player.respawn(sp.x, sp.y + 1, sp.z);
+  player.yaw = 0;
+}
+
+/* Walk for a while across open world; must never fall out of the world.
+   Run this out on the flats: from spawn the player would walk straight off the
+   overlook into the Descent, and "fell 700 units" is the intended behaviour of
+   a hole, not a bug in the controller. */
+{
+  const wx = -1400, wz = -1400;
+  player.respawn(wx, heightAt(wx, wz) + 2, wz);
+  for (let i = 0; i < 60; i++) frame(1 / 60);
+}
 let minY = Infinity, maxDrop = 0;
 for (let i = 0; i < (QUICK ? 400 : 1400); i++) {
   frame(1 / 60, ['KeyW', i % 400 < 200 ? 'ShiftLeft' : 'KeyW'], [false, false, false], [i % 90 === 0 ? 0.35 : 0, 0]);
@@ -287,6 +424,13 @@ check('player stayed near the ground', maxDrop < 40, `max height above support $
 Combat.stats.shots = 0; Combat.stats.hits = 0; Combat.stats.kills = 0;
 player.spawnAt(sp.x, sp.y + 1, sp.z);
 for (let i = 0; i < 60; i++) frame(1 / 60);
+
+/* Fight on the flats. Spawn is cantilevered over the Descent, so a ring of
+   enemies around the player half-lands in a 780-unit hole. */
+const ARENA_X = -1400, ARENA_Z = -1400;
+player.respawn(ARENA_X, heightAt(ARENA_X, ARENA_Z) + 2, ARENA_Z);
+for (let i = 0; i < 60; i++) frame(1 / 60);
+player.respawnPoint.set(player.pos.x, player.pos.y, player.pos.z);
 
 const dummies = [];
 for (let i = 0; i < 8; i++) {
@@ -551,9 +695,22 @@ for (let i = 0; i < soakFrames; i++) {
   }
 }
 check('soak run completed', true, `${soakFrames} frames, ${deaths} deaths, ${Enemies.list.length} enemies live, ${Combat.stats.kills} kills`);
-// XP has to actually flow through live play, not just in the unit checks.
-check('killing things banks xp in play', player.progress.total > xpAtSoakStart,
-  `+${player.progress.total - xpAtSoakStart} xp, rank ${rankAtSoakStart} -> ${player.progress.level}`);
+// XP has to actually flow through the shipped kill hook, not just the unit
+// checks. Kill something deliberately rather than hoping the soak did — whether
+// the wandering player bumps into an enemy is not what this is testing.
+{
+  const before = player.progress.total;
+  const victim = Enemies.spawnAtGround('chitter', player.pos.x + 6, player.pos.z, { level: 3 });
+  if (!victim) errors.push('could not spawn an xp test target');
+  else {
+    Combat.damage(victim, 99999, { kind: 'bullet', source: player });
+    check('killing something banks xp through the real hook', player.progress.total > before,
+      `+${player.progress.total - before} xp for a level 3 chitter`);
+    if (victim.alive) victim.dispose();
+  }
+}
+check('the soak itself ran the progression path', player.progress.total >= xpAtSoakStart,
+  `rank ${rankAtSoakStart} -> ${player.progress.level}`);
 check('rank floors the power drops roll at', player.dropPower >= player.progress.powerFloor,
   `dropPower ${player.dropPower} floor ${player.progress.powerFloor} gear ${player.inventory.power}`);
 check('enemy budget respected', Enemies.list.length <= Enemies.budget + 12, String(Enemies.list.length));
